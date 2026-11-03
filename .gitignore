@@ -1,0 +1,7 @@
+node_modules/
+dist/
+public/vendor/
+data-cache/
+test-results/
+*.log
+.DS_Store

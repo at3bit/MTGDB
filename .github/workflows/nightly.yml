@@ -1,0 +1,67 @@
+# Rebuilds the card database from Scryfall (prices + any new sets) and deploys
+# the app to Vercel. Runs nightly, on demand, and on pushes to main.
+#
+# One-time setup (repo Settings › Secrets and variables › Actions):
+#   VERCEL_TOKEN        a token from vercel.com/account/tokens
+#   VERCEL_ORG_ID       from .vercel/project.json after `npx vercel link`
+#   VERCEL_PROJECT_ID   same file
+# Without them the workflow still builds and tests, and keeps the built site as
+# a downloadable artifact.
+#
+# Scheduled and push runs are off until you opt in by adding a repository
+# variable NIGHTLY_ENABLED = true (Settings › Secrets and variables › Actions ›
+# Variables). You can always start a run by hand from the Actions tab.
+name: Nightly data + deploy
+
+on:
+  schedule:
+    - cron: '23 11 * * *' # daily, after Scryfall's price refresh
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.NIGHTLY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+      # Fingerprints only need recomputing for new or re-scanned card images, so
+      # keep the previous build's data between runs. The first run fingerprints
+      # every printing (~100k images) and takes the longest.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            public/data
+            data-cache
+          key: card-data-${{ github.run_id }}
+          restore-keys: card-data-
+      - run: npm run data
+      - run: npm run build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: dist
+          retention-days: 7
+
+      - name: Deploy to Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        if: ${{ env.VERCEL_TOKEN != '' }}
+        run: npx --yes vercel@65.10.0 deploy dist --prod --yes --token "$VERCEL_TOKEN"

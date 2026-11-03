@@ -1,0 +1,182 @@
+// End-to-end test in headless Chromium with synthetic data:
+//   1. builds a small synthetic card index (procedural "cards", not real ones),
+//   2. renders a binder-run video: 3 spreads, page turns, and a hand passing
+//      over a spread without turning the page,
+//   3. uploads it to the built app, processes it, checks the review screen,
+//      saves the binder and checks the binder screen.
+// Run with: npm run e2e   (after npm run build)
+import { createServer } from 'node:http';
+import { createRequire } from 'node:module';
+import { spawn } from 'node:child_process';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync } from 'node:fs';
+import { join, extname, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { FP_WORDS, fingerprint } from '../src/core/fingerprint.ts';
+import { encodeFingerprints, type CardsFile } from '../src/core/carddb.ts';
+import { makeCard, renderSpread, rng, toReferenceSize, SCENE_PAGES } from '../tests/synth.ts';
+import type { RGBAImage } from '../src/core/image.ts';
+
+const require = createRequire(import.meta.url);
+const { chromium } = require(process.env.PLAYWRIGHT_PATH ?? 'playwright');
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const dist = join(root, 'dist');
+const out = join(root, 'test-results');
+const W = 1280, H = 720, FPS = 15;
+mkdirSync(out, { recursive: true });
+if (!existsSync(join(dist, 'index.html'))) throw new Error('Run `npm run build` first');
+
+// 1. Synthetic index
+const N = 300;
+const cards = Array.from({ length: N }, (_, i) => makeCard(9000 + i));
+const r = rng(4);
+const file: CardsFile = {
+  v: 1,
+  built: new Date().toISOString(),
+  source: 'Synthetic test data',
+  sets: { tst: 'Synthetic Test Set' },
+  cards: cards.map((_, i) => [`00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, `Synthetic Card ${String(i).padStart(3, '0')}`, 'tst', String(i + 1), 'common', 3, Math.round(r() * 5000) / 100, null, null]),
+};
+const fps = new Uint32Array(N * FP_WORDS);
+cards.forEach((c, i) => fps.set(fingerprint(toReferenceSize(c)), i * FP_WORDS));
+mkdirSync(join(dist, 'test-data'), { recursive: true });
+writeFileSync(join(dist, 'test-data', 'cards.json'), JSON.stringify(file));
+writeFileSync(join(dist, 'test-data', 'fingerprints.bin'), encodeFingerprints(fps, N));
+
+// 2. Video
+const spreadIds = [0, 1, 2].map((s) => Array.from({ length: 18 }, (_, i) => (s === 1 && i === 8 ? -1 : (s * 18 + i * 7 + 3) % N)));
+const renderVariant = (s: number, v: number) =>
+  renderSpread(spreadIds[s].map((id) => (id >= 0 ? cards[id] : null)), { width: W, height: H, seed: 100 + s, noiseSeed: 500 + v, noise: 2.5, blur: true, jitter: 0.012 }).frame;
+console.log('rendering frames…');
+const still = spreadIds.map((_, s) => [0, 1, 2].map((v) => renderVariant(s, v)));
+const blend = (a: RGBAImage, b: RGBAImage, t: number, handX: number): Uint8Array => {
+  const o = new Uint8Array(W * H * 3);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const p = (y * W + x) * 4, q = (y * W + x) * 3;
+    const dx = (x / W - handX) / 0.18, dy = (y / H - 0.55) / 0.35;
+    const hand = dx * dx + dy * dy <= 1;
+    for (let c = 0; c < 3; c++) o[q + c] = hand ? [196, 150, 120][c] : a.data[p + c] * (1 - t) + b.data[p + c] * t;
+  }
+  return o;
+};
+const rgb = (img: RGBAImage) => {
+  const o = new Uint8Array(W * H * 3);
+  for (let i = 0, j = 0; i < img.data.length; i += 4, j += 3) { o[j] = img.data[i]; o[j + 1] = img.data[i + 1]; o[j + 2] = img.data[i + 2]; }
+  return o;
+};
+const frames: Uint8Array[] = [];
+const hold = (s: number, seconds: number) => { for (let i = 0; i < seconds * FPS; i++) frames.push(rgb(still[s][i % 3])); };
+const turn = (a: number, b: number, seconds: number) => {
+  const n = Math.round(seconds * FPS);
+  for (let i = 0; i < n; i++) frames.push(blend(still[a][0], still[b][0], i / (n - 1), 1.1 - (1.4 * i) / (n - 1)));
+};
+const passOver = (s: number, seconds: number) => {
+  const n = Math.round(seconds * FPS);
+  for (let i = 0; i < n; i++) frames.push(blend(still[s][0], still[s][0], 0, 1.1 - (1.4 * i) / (n - 1)));
+};
+hold(0, 1.6);
+turn(0, 1, 0.8);
+hold(1, 1.6);
+passOver(1, 0.6); // hand passes over without turning the page
+hold(1, 1.4);
+turn(1, 2, 0.8);
+hold(2, 1.6);
+const videoPath = join(out, 'run.webm');
+await new Promise<void>((resolve, reject) => {
+  const ff = spawn('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', `${W}x${H}`, '-r', String(FPS), '-i', '-', '-c:v', 'libvpx-vp9', '-b:v', '6M', '-deadline', 'realtime', '-cpu-used', '8', '-g', '15', videoPath]);
+  ff.on('error', reject);
+  ff.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}`))));
+  for (const f of frames) ff.stdin.write(f);
+  ff.stdin.end();
+});
+console.log(`video: ${frames.length} frames, ${(statSync(videoPath).size / 1e6).toFixed(1)} MB`);
+
+// 3. Serve dist and drive the app
+const types: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.bin': 'application/octet-stream', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.gz': 'application/gzip' };
+const server = createServer((req, res) => {
+  const url = new URL(req.url ?? '/', 'http://x');
+  let p = join(dist, decodeURIComponent(url.pathname));
+  if (!existsSync(p) || statSync(p).isDirectory()) p = join(dist, 'index.html');
+  res.writeHead(200, { 'Content-Type': types[extname(p)] ?? 'application/octet-stream' });
+  res.end(readFileSync(p));
+});
+await new Promise<void>((r) => server.listen(4173, r));
+
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 });
+const logs: string[] = [];
+page.on('console', (m: any) => logs.push(`${m.type()}: ${m.text()}`));
+page.on('pageerror', (e: Error) => logs.push(`pageerror: ${e.message}`));
+let failed = false;
+const check = (cond: boolean, msg: string) => { console.log(`${cond ? 'PASS' : 'FAIL'} ${msg}`); if (!cond) failed = true; };
+
+try {
+  await page.goto('http://localhost:4173/?db=test-data');
+  // Seed the saved calibration so the outline matches the synthetic scene (a user does this by dragging corners once).
+  await page.evaluate(async (pages: unknown) => {
+    await new Promise<void>((resolve, reject) => {
+      const req = indexedDB.open('keyval-store');
+      req.onupgradeneeded = () => req.result.createObjectStore('keyval');
+      req.onsuccess = () => {
+        const tx = req.result.transaction('keyval', 'readwrite');
+        tx.objectStore('keyval').put({ calibration: { pages, rows: 3, cols: 3 }, rotation: 0, frameW: 1280, frameH: 720 }, 'calibration-v1');
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      };
+    });
+  }, SCENE_PAGES);
+  await page.reload();
+  await page.getByRole('button', { name: 'Scan a binder' }).waitFor({ timeout: 20000 });
+  await page.screenshot({ path: join(out, '1-home.png') });
+  await page.getByRole('button', { name: 'Scan a binder' }).click();
+  await page.locator('input[type=text]').fill('Trade Binder');
+  await page.screenshot({ path: join(out, '2-setup.png') });
+  await page.setInputFiles('[data-testid=video-input]', videoPath);
+  await page.getByRole('button', { name: 'Process video' }).waitFor({ timeout: 20000 });
+  await page.waitForTimeout(800);
+  await page.screenshot({ path: join(out, '3-calibrate.png') });
+  const t0 = Date.now();
+  await page.getByRole('button', { name: 'Process video' }).click();
+  await page.waitForTimeout(1500);
+  await page.screenshot({ path: join(out, '4-running.png') });
+  await page.getByText('Review “Trade Binder”').waitFor({ timeout: 120000 });
+  console.log(`processed in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: join(out, '5-review.png'), fullPage: true });
+
+  const spreadCount = await page.locator('strong', { hasText: /^Spread \d+$/ }).count();
+  check(spreadCount === 3, `3 spreads captured (got ${spreadCount}); the hand pass-over was not counted as a new spread`);
+  const tiles: { cls: string; name: string }[] = await page.locator('.tile').evaluateAll((els: Element[]) => els.map((e) => ({ cls: e.className, name: e.querySelector('.name')?.textContent ?? '' })));
+  const expected = spreadIds.flatMap((ids) => ids.map((id) => (id >= 0 ? `Synthetic Card ${String(id).padStart(3, '0')}` : 'Empty')));
+  let correct = 0;
+  tiles.forEach((t, i) => { if (t.name === expected[i]) correct++; else console.log(`  tile ${i}: expected ${expected[i]}, got "${t.name}" (${t.cls})`); });
+  check(tiles.length === 54 && correct >= 52, `pockets identified: ${correct}/${tiles.length}`);
+  const expectedTotal = spreadIds.flat().filter((id) => id >= 0).reduce((t, id) => t + (file.cards[id][6] as number), 0);
+  const shownTotal = await page.locator('.big-number').first().textContent();
+  console.log(`  total shown ${shownTotal}, expected $${expectedTotal.toFixed(2)} if all correct`);
+
+  // Open a pocket, then save.
+  await page.locator('.tile').nth(1).click();
+  await page.getByRole('dialog').waitFor();
+  await page.screenshot({ path: join(out, '6-sheet.png') });
+  await page.getByRole('button', { name: 'Done' }).click();
+  await page.getByRole('button', { name: 'Save binder' }).click();
+  await page.getByText('By value').waitFor({ timeout: 10000 });
+  await page.screenshot({ path: join(out, '7-binder.png'), fullPage: true });
+  const saved = await page.locator('.list li').count();
+  const identified = tiles.filter((t) => !['Empty', '?', 'Check', '—'].includes(t.name)).length;
+  check(saved === identified, `binder saved with ${saved} cards (expected ${identified}; empty pockets are skipped)`);
+  await page.getByRole('button', { name: '‹ Home' }).click();
+  await page.screenshot({ path: join(out, '8-home-after.png'), fullPage: true });
+} catch (e) {
+  failed = true;
+  console.error(e);
+  await page.screenshot({ path: join(out, 'error.png'), fullPage: true }).catch(() => {});
+} finally {
+  const problems = logs.filter((l) => /error/i.test(l));
+  if (problems.length) console.log('browser console:\n  ' + problems.join('\n  '));
+  await browser.close();
+  server.close();
+}
+console.log(failed ? 'E2E FAILED' : 'E2E PASSED');
+process.exit(failed ? 1 : 0);
