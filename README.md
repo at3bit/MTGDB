@@ -73,6 +73,7 @@ npm install          # also copies the OCR engine into public/vendor
 npm run data         # build public/data/ from Scryfall (needs internet; ~10 min the first time, ~1 min after)
 npm run baselines    # 30/90-day price baselines from MTGJSON (run after data; ~2 min)
 npm run eval         # accuracy on real card scans in simulated binder photos (after data)
+npm run smoke -- https://mtgdb.vercel.app   # upload a real-card binder video to a deployed site and check the results
 npm run dev          # local dev server (https is needed for the camera on a phone; see below)
 npm test             # unit + synthetic recognition tests
 npm run typecheck
