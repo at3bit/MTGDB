@@ -22,7 +22,8 @@ import { decodeFingerprints, encodeFingerprints, type CardRow, type CardsFile } 
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = join(root, 'public', 'data');
-// Vercel keeps node_modules between builds, so fingerprints cached there are reused on the next deploy.
+// Vercel keeps node_modules between builds, so fingerprints cached there are reused on the next deploy
+// (as long as the install step is `npm install`; `npm ci` deletes node_modules first).
 const cacheDir = process.env.MTGDB_CACHE_DIR ?? (process.env.VERCEL ? join(root, 'node_modules', '.cache', 'mtgdb') : join(root, 'data-cache'));
 const UA = 'MTGDB-binder-scanner/0.1 (personal collection tool)';
 const args = process.argv.slice(2);
