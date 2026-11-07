@@ -2,6 +2,7 @@ import { formatUSD, type CardDB } from '../core/carddb.ts';
 import { cardPrice, type LivePrices } from '../app/session.ts';
 import { trendFor, type Collection, type PriceHistory } from '../app/store.ts';
 import { scryfallImage } from '../app/prices.ts';
+import type { Baselines } from '../core/baselines.ts';
 
 interface Props {
   db: CardDB | null;
@@ -9,6 +10,7 @@ interface Props {
   collection: Collection;
   live: LivePrices;
   history: PriceHistory;
+  baselines: Baselines | null;
   refreshing: string | null;
   onScan: () => void;
   onOpenBinder: (name: string) => void;
@@ -31,7 +33,7 @@ export interface OwnedRow {
   trend: ReturnType<typeof trendFor>;
 }
 
-export function ownedRows(db: CardDB, col: Collection, live: LivePrices, history: PriceHistory, binder?: string): OwnedRow[] {
+export function ownedRows(db: CardDB, col: Collection, live: LivePrices, history: PriceHistory, baselines: Baselines | null, binder?: string): OwnedRow[] {
   const rows: OwnedRow[] = [];
   for (const b of col.binders) {
     if (binder && b.name !== binder) continue;
@@ -40,7 +42,7 @@ export function ownedRows(db: CardDB, col: Collection, live: LivePrices, history
       if (idx < 0) continue;
       const info = db.info(idx);
       const price = cardPrice(db, idx, c.finish, live);
-      rows.push({ binder: b.name, page: c.page, slot: c.slot, card: idx, id: c.id, name: info.name, set: info.set, finish: c.finish, price, trend: trendFor(history, c.id, c.finish, price) });
+      rows.push({ binder: b.name, page: c.page, slot: c.slot, card: idx, id: c.id, name: info.name, set: info.set, finish: c.finish, price, trend: trendFor(history, c.id, c.finish, price, baselines?.get(idx, c.finish)) });
     }
   }
   return rows;
@@ -52,12 +54,12 @@ export function TrendBadge({ t }: { t: OwnedRow['trend'] }) {
   return <span className={`badge ${up ? 'up' : 'down'}`}>{up ? '▲' : '▼'} {Math.round(Math.abs(t.vsAvg) * 100)}%</span>;
 }
 
-export function HomeScreen({ db, dbStatus, collection, live, history, refreshing, onScan, onOpenBinder, onRefresh }: Props) {
-  const rows = db ? ownedRows(db, collection, live, history) : [];
+export function HomeScreen({ db, dbStatus, collection, live, history, baselines, refreshing, onScan, onOpenBinder, onRefresh }: Props) {
+  const rows = db ? ownedRows(db, collection, live, history, baselines) : [];
   const total = rows.reduce((t, r) => t + (r.price ?? 0), 0);
   const sell = rows
-    .filter((r) => r.trend && r.trend.vsAvg >= SELL_SIGNAL && (r.price ?? 0) - r.trend.avg >= 1)
-    .sort((a, b) => (b.price! - b.trend!.avg) - (a.price! - a.trend!.avg))
+    .filter((r) => r.trend && r.trend.vsAvg >= SELL_SIGNAL && r.trend.avg * r.trend.vsAvg >= 1)
+    .sort((a, b) => b.trend!.avg * b.trend!.vsAvg - a.trend!.avg * a.trend!.vsAvg)
     .slice(0, 10);
   const top = [...rows].sort((a, b) => (b.price ?? 0) - (a.price ?? 0)).slice(0, 10);
   const binderValue = (name: string) => rows.filter((r) => r.binder === name).reduce((t, r) => t + (r.price ?? 0), 0);
@@ -93,14 +95,17 @@ export function HomeScreen({ db, dbStatus, collection, live, history, refreshing
       {sell.length > 0 && (
         <div className="card">
           <h2>Worth selling now</h2>
-          <p className="muted small" style={{ marginTop: 0 }}>At least {Math.round(SELL_SIGNAL * 100)}% above their own 30-day average.</p>
+          <p className="muted small" style={{ marginTop: 0 }}>
+            Trading at least {Math.round(SELL_SIGNAL * 100)}% (and $1) above their own 30-day average
+            {baselines ? ` on TCGplayer, as of ${baselines.asOf}` : ''}.
+          </p>
           <ul className="list">
             {sell.map((r) => (
               <li key={`${r.binder}-${r.page}-${r.slot}`}>
                 <img className="mini" src={scryfallImage(r.id, 'small')} alt="" loading="lazy" />
                 <div className="grow">
                   <div className="ellipsis">{r.name}</div>
-                  <div className="muted small">{r.binder} · page {r.page} · slot {r.slot}</div>
+                  <div className="muted small">{r.binder} · page {r.page} · slot {r.slot} · avg {formatUSD(r.trend!.avg)}</div>
                 </div>
                 <div style={{ textAlign: 'right' }}>
                   <div className="num">{formatUSD(r.price)}</div>

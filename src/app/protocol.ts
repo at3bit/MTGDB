@@ -23,6 +23,7 @@ export interface WirePocket {
   thumb: WireImage;
   nameCrop?: WireImage;
   query?: number[];
+  borderLuma?: number;
 }
 
 export type WorkerResponse =

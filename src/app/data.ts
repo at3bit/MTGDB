@@ -1,5 +1,6 @@
 // Loads the card catalogue and fingerprint index, and owns the recognizer worker.
 import { CardDB, decodeFingerprints, type CardsFile } from '../core/carddb.ts';
+import { Baselines } from '../core/baselines.ts';
 import type { Calibration } from '../core/geometry.ts';
 import type { WireImage, WirePocket, WorkerRequest, WorkerResponse } from './protocol.ts';
 
@@ -32,6 +33,19 @@ export async function loadCardDB(onProgress?: (msg: string) => void): Promise<Ca
   const fps = decodeFingerprints(await fpRes.arrayBuffer());
   onProgress?.('Indexing names…');
   return new CardDB(file, fps);
+}
+
+/** Optional market price baselines; null when not built or out of step with the catalogue. */
+export async function loadBaselines(db: CardDB): Promise<Baselines | null> {
+  try {
+    const day = new Date().toISOString().slice(0, 10);
+    const res = await fetch(`${dataBase()}baselines.bin?d=${day}`);
+    if (!res.ok || (res.headers.get('content-type') ?? '').includes('text/html')) return null;
+    const b = new Baselines(await res.arrayBuffer());
+    return b.count === db.count ? b : null;
+  } catch {
+    return null;
+  }
 }
 
 type Pending = { resolve: (p: { pockets: WirePocket[]; ms: number }) => void; reject: (e: Error) => void };

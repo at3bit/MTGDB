@@ -26,3 +26,28 @@ describe('data build', () => {
     expect(fpDistance(fp, fingerprint(card), 0)).toBeLessThan(8);
   });
 });
+
+describe('data build: JSON Lines input', () => {
+  it('streams one-object-per-line files (Scryfall bulk format since 2026)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mtgdb-'));
+    const items = [{ id: 'a', name: 'Forest' }, { id: 'b', name: 'Brace } { "x"' }];
+    writeFileSync(join(dir, 'cards.jsonl'), items.map((x) => JSON.stringify(x)).join('\n') + '\n');
+    const got: unknown[] = [];
+    for await (const o of streamArray(join(dir, 'cards.jsonl'))) got.push(o);
+    expect(got).toEqual(items);
+  });
+});
+
+describe('data build: nested object streaming', () => {
+  it('yields entries of a nested object across arbitrary chunk boundaries', async () => {
+    const { streamObjectEntries } = await import('../scripts/stream-json.ts');
+    const doc = { meta: { date: '2026-11-07', version: '5' }, data: { 'u-1': { paper: { tcgplayer: { retail: { normal: { '2026-11-06': 1.5, '2026-11-07': 2 } } } } }, 'we"ird}': { a: [1, { b: '}{' }] }, 'u-3': {} } };
+    const text = JSON.stringify(doc);
+    for (const size of [1, 3, 7, 64, text.length]) {
+      async function* chunks() { for (let i = 0; i < text.length; i += size) yield text.slice(i, i + size); }
+      const got: [string, unknown][] = [];
+      for await (const e of streamObjectEntries(chunks())) got.push(e);
+      expect(got).toEqual(Object.entries(doc.data));
+    }
+  });
+});

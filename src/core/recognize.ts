@@ -53,6 +53,23 @@ export interface PocketResult {
   nameCrop?: RGBAImage;
   /** Fingerprint of the best card placement, for re-ranking printings later (e.g. after OCR). */
   query?: Uint32Array;
+  /** Mean brightness (0..255) of the card's printed border; tells black-bordered printings from white/gold ones. */
+  borderLuma?: number;
+}
+
+/** Brightness of the printed border: median of four thin strips just inside the card's edges. */
+export function borderLuma(g: GrayImage, w: Rect): number {
+  const strip = (fx0: number, fy0: number, fx1: number, fy1: number) => {
+    const r = resampleGray(g, { x: w.x + w.w * fx0, y: w.y + w.h * fy0, w: w.w * (fx1 - fx0), h: w.h * (fy1 - fy0) }, 4, 4);
+    return r.data.reduce((a, b) => a + b, 0) / r.data.length;
+  };
+  const sides = [
+    strip(0.008, 0.12, 0.03, 0.88),
+    strip(0.97, 0.12, 0.992, 0.88),
+    strip(0.12, 0.006, 0.88, 0.022),
+    strip(0.12, 0.978, 0.88, 0.994),
+  ].sort((a, b) => a - b);
+  return (sides[1] + sides[2]) / 2;
 }
 
 export interface MatchIndex {
@@ -233,6 +250,7 @@ export function recognizePocket(pc: PocketCrop, idx: MatchIndex, cfg: RecognizeC
     thumb: thumbOf(bestWindow),
     nameCrop,
     query: fps[bestK],
+    borderLuma: borderLuma(pc.gray, bestWindow),
   };
 }
 

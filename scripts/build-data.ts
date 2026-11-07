@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { tmpdir } from 'node:os';
+import { createGunzip } from 'node:zlib';
 import sharp from 'sharp';
 import { streamArray } from './stream-json.ts';
 import { fingerprint, FP_WORDS } from '../src/core/fingerprint.ts';
@@ -41,6 +42,9 @@ interface ScryCard {
   games: string[];
   finishes: string[];
   image_status: string;
+  border_color: string;
+  set_type: string;
+  promo: boolean;
   image_uris?: { small: string };
   card_faces?: { name: string; image_uris?: { small: string } }[];
   prices: { usd: string | null; usd_foil: string | null; usd_etched: string | null };
@@ -58,6 +62,16 @@ function price(v: string | null): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+const BORDER_CODE: Record<string, string> = { black: 'b', white: 'w', borderless: 'x', silver: 's', gold: 'g', yellow: 'y' };
+const SPECIAL_SET_TYPES = new Set(['promo', 'memorabilia', 'funny', 'token', 'minigame', 'vanguard']);
+
+/** 0 = regular printing, 1 = The List reprint, 2 = promo / collectible variant. Used to break visual ties. */
+function printingPriority(c: ScryCard): number {
+  if (c.promo || SPECIAL_SET_TYPES.has(c.set_type)) return 2;
+  if (c.set === 'plst') return 1;
+  return 0;
+}
+
 function smallImage(c: ScryCard): string | null {
   return c.image_uris?.small ?? c.card_faces?.[0]?.image_uris?.small ?? null;
 }
@@ -67,14 +81,20 @@ async function main() {
   mkdirSync(cacheDir, { recursive: true });
 
   console.log('Fetching bulk data listing…');
-  const bulk = await getJSON<{ data: { type: string; download_uri: string; updated_at: string }[] }>('https://api.scryfall.com/bulk-data');
+  type BulkEntry = { type: string; download_uri?: string; jsonl_download_uri?: string; updated_at: string };
+  const bulk = await getJSON<{ data: BulkEntry[] }>('https://api.scryfall.com/bulk-data');
   const entry = bulk.data.find((d) => d.type === 'default_cards');
-  if (!entry) throw new Error('default_cards bulk file not listed');
+  // Scryfall now publishes gzipped JSON Lines (jsonl_download_uri); older listings had a plain JSON array (download_uri).
+  const uri = entry?.jsonl_download_uri ?? entry?.download_uri;
+  if (!entry || !uri) throw new Error('default_cards bulk file not listed');
   const bulkPath = join(tmpdir(), 'mtgdb-default-cards.json');
-  console.log(`Downloading ${entry.download_uri} (updated ${entry.updated_at})…`);
-  const res = await fetch(entry.download_uri, { headers: { 'User-Agent': UA } });
+  console.log(`Downloading ${uri} (updated ${entry.updated_at})…`);
+  const res = await fetch(uri, { headers: { 'User-Agent': UA } });
   if (!res.ok || !res.body) throw new Error(`bulk download failed: HTTP ${res.status}`);
-  await pipeline(Readable.fromWeb(res.body as any), createWriteStream(bulkPath));
+  const gzipped = /\.gz($|\?)/.test(uri) || /gzip/.test(res.headers.get('content-type') ?? '');
+  const body = Readable.fromWeb(res.body as any);
+  if (gzipped) await pipeline(body, createGunzip(), createWriteStream(bulkPath));
+  else await pipeline(body, createWriteStream(bulkPath));
 
   const rows: CardRow[] = [];
   const images: string[] = [];
@@ -87,7 +107,7 @@ async function main() {
     const img = smallImage(c);
     if (!img) continue;
     const fin = (c.finishes.includes('nonfoil') ? 1 : 0) | (c.finishes.includes('foil') ? 2 : 0) | (c.finishes.includes('etched') ? 4 : 0);
-    rows.push([c.id, c.name, c.set, c.collector_number, c.rarity, fin, price(c.prices.usd), price(c.prices.usd_foil), price(c.prices.usd_etched)]);
+    rows.push([c.id, c.name, c.set, c.collector_number, c.rarity, fin, price(c.prices.usd), price(c.prices.usd_foil), price(c.prices.usd_etched), BORDER_CODE[c.border_color] ?? '', printingPriority(c)]);
     images.push(img);
     sets[c.set] = c.set_name;
     if (rows.length >= limit) break;

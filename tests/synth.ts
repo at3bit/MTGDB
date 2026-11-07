@@ -116,6 +116,8 @@ export interface RenderOptions {
   calibError?: number;
   /** Seed for per-frame sensor noise only (layout stays the same). Defaults to `seed`. */
   noiseSeed?: number;
+  /** Milky veil from pocket plastic: 0 = none, 0.15 = typical sleeve. */
+  haze?: number;
   /** Optional occluder (e.g. a hand) as a dark ellipse in normalised coords. */
   occluder?: { x: number; y: number; rx: number; ry: number };
 }
@@ -186,6 +188,7 @@ export function renderSpread(cards: (RGBAImage | null)[], o: RenderOptions): Spr
   const cast = o.cast ?? [1, 1, 1];
   const noise = o.noise ?? 0;
   const glare = o.glare ?? 0;
+  const haze = o.haze ?? 0;
   const gx = 0.3 + r() * 0.4, gy = 0.3 + r() * 0.4, gr = 0.08;
   const nr = o.noiseSeed === undefined ? r : rng(o.noiseSeed);
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
@@ -194,7 +197,7 @@ export function renderSpread(cards: (RGBAImage | null)[], o: RenderOptions): Spr
     const gl = glare * Math.exp(-(dx * dx + dy * dy) / (gr * gr));
     for (let c = 0; c < 3; c++) {
       const n = noise ? (nr() + nr() + nr() - 1.5) * 2 * noise : 0;
-      const v = frame.data[p + c] * exposure * cast[c] + n;
+      const v = (frame.data[p + c] * (1 - haze) + 210 * haze) * exposure * cast[c] + n;
       frame.data[p + c] = v + (255 - v) * gl;
     }
   }

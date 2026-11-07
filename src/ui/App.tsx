@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CardDB } from '../core/carddb.ts';
-import { loadCardDB, MissingDataError, Recognizer } from '../app/data.ts';
+import { loadBaselines, loadCardDB, MissingDataError, Recognizer } from '../app/data.ts';
+import type { Baselines } from '../core/baselines.ts';
 import { applyOcr, mergeInto, needsOcr, sameSpread, toPocketView, type LivePrices, type PocketView, type Spread } from '../app/session.ts';
 import { loadCollection, loadHistory, loadLivePrices, recordPrices, saveCollection, saveLivePrices, type Collection, type OwnedCard, type PriceHistory } from '../app/store.ts';
 import { fetchLivePrices } from '../app/prices.ts';
@@ -27,6 +28,7 @@ export function App() {
   const [collection, setCollection] = useState<Collection>({ binders: [] });
   const [live, setLive] = useState<LivePrices>({});
   const [history, setHistory] = useState<PriceHistory>({});
+  const [baselines, setBaselines] = useState<Baselines | null>(null);
   const [screen, setScreen] = useState<Screen>({ name: 'home' });
   const [spreads, setSpreads] = useState<Spread[]>([]);
   const [pagesPerSpread, setPagesPerSpread] = useState(2);
@@ -54,6 +56,7 @@ export function App() {
         recognizer.current = new Recognizer(loaded);
         setDbStatus({ loading: null, error: null, missing: false });
         setHistory(await recordPrices(loaded, col, lp));
+        setBaselines(await loadBaselines(loaded));
       } catch (e) {
         setDbStatus({ loading: null, error: (e as Error).message, missing: e instanceof MissingDataError });
       }
@@ -88,7 +91,7 @@ export function App() {
     (r: { pockets: WirePocket[]; time: number }, pps: number) => {
       if (!db) return;
       setPagesPerSpread(pps);
-      const pockets: KeyedPocket[] = r.pockets.map((p) => ({ ...toPocketView(p), key: ++pocketKeys }));
+      const pockets: KeyedPocket[] = r.pockets.map((p) => ({ ...toPocketView(p, db), key: ++pocketKeys }));
       const prev = spreadsRef.current;
       const last = prev[prev.length - 1];
       if (last && sameSpread(last.pockets, pockets, db)) {
@@ -150,6 +153,7 @@ export function App() {
           collection={collection}
           live={live}
           history={history}
+          baselines={baselines}
           refreshing={refreshing}
           onScan={() => setScreen({ name: 'setup' })}
           onOpenBinder={(b) => setScreen({ name: 'binder', binder: b })}
@@ -203,6 +207,7 @@ export function App() {
           collection={collection}
           live={live}
           history={history}
+          baselines={baselines}
           onBack={() => setScreen({ name: 'home' })}
           onDelete={async () => {
             const next = { binders: collection.binders.filter((b) => b.name !== screen.binder) };

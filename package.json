@@ -11,8 +11,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "e2e": "tsx scripts/e2e.ts",
-    "data": "tsx scripts/build-data.ts",
-    "postinstall": "node scripts/copy-vendor.mjs"
+    "data": "NODE_USE_ENV_PROXY=1 tsx scripts/build-data.ts",
+    "postinstall": "node scripts/copy-vendor.mjs",
+    "eval": "NODE_USE_ENV_PROXY=1 tsx scripts/eval-real.ts",
+    "baselines": "NODE_USE_ENV_PROXY=1 tsx scripts/build-baselines.ts"
   },
   "dependencies": {
     "@tesseract.js-data/eng": "^1.0.0",

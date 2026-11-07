@@ -4,6 +4,7 @@ import type { LivePrices } from '../app/session.ts';
 import type { Collection, PriceHistory } from '../app/store.ts';
 import { scryfallImage, scryfallPage } from '../app/prices.ts';
 import { ownedRows, TrendBadge, type OwnedRow } from './HomeScreen.tsx';
+import type { Baselines } from '../core/baselines.ts';
 
 interface Props {
   db: CardDB;
@@ -11,6 +12,7 @@ interface Props {
   collection: Collection;
   live: LivePrices;
   history: PriceHistory;
+  baselines: Baselines | null;
   onBack: () => void;
   onDelete: () => void;
 }
@@ -25,9 +27,9 @@ function toCSV(rows: OwnedRow[], db: CardDB): string {
   return lines.join('\n');
 }
 
-export function BinderScreen({ db, name, collection, live, history, onBack, onDelete }: Props) {
+export function BinderScreen({ db, name, collection, live, history, baselines, onBack, onDelete }: Props) {
   const [sort, setSort] = useState<'value' | 'page'>('value');
-  const rows = ownedRows(db, collection, live, history, name);
+  const rows = ownedRows(db, collection, live, history, baselines, name);
   const sorted = [...rows].sort((a, b) => (sort === 'value' ? (b.price ?? 0) - (a.price ?? 0) : a.page - b.page || a.slot - b.slot));
   const total = rows.reduce((t, r) => t + (r.price ?? 0), 0);
 

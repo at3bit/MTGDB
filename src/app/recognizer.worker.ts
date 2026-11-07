@@ -38,6 +38,7 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
           thumb: { width: r.thumb.width, height: r.thumb.height, buffer: r.thumb.data.buffer as ArrayBuffer },
           nameCrop: r.nameCrop ? { width: r.nameCrop.width, height: r.nameCrop.height, buffer: r.nameCrop.data.buffer as ArrayBuffer } : undefined,
           query: r.query ? Array.from(r.query) : undefined,
+          borderLuma: r.borderLuma,
         };
       });
       post({ type: 'spread', job: msg.job, pockets, ms: performance.now() - t0 }, transfer);

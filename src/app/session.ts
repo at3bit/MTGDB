@@ -1,5 +1,6 @@
 // The results of one binder run, as shown in the review screen.
-import { fpDistance, type Match } from '../core/fingerprint.ts';
+import type { Match } from '../core/fingerprint.ts';
+import { resolvePrinting, rankPrintings as rankPrintingsCore, type RankedPrinting } from '../core/printing.ts';
 import { DEFAULT_RECOGNIZE, type PocketStatus } from '../core/recognize.ts';
 import type { CardDB, Finish } from '../core/carddb.ts';
 import type { WireImage, WirePocket } from './protocol.ts';
@@ -21,6 +22,10 @@ export interface PocketView {
   via: 'image' | 'text' | 'manual' | null;
   ocrText?: string;
   glare: number;
+  /** Brightness of the card's printed border in the photo. */
+  borderLuma?: number;
+  /** Look-alike printings with different prices: the user should confirm which one. */
+  printingCheck?: boolean;
 }
 
 export interface Spread {
@@ -30,22 +35,37 @@ export interface Spread {
   pockets: PocketView[];
 }
 
-export function toPocketView(p: WirePocket): PocketView {
+export function toPocketView(p: WirePocket, db: CardDB): PocketView {
   const chosen = p.status === 'empty' || !p.matches.length || p.status === 'unknown' ? null : p.matches[0].card;
-  return {
-    page: p.page,
-    slot: p.slot,
-    status: p.status,
-    matches: p.matches,
-    otherNameDistance: p.otherNameDistance,
-    thumbUrl: imageToDataURL(p.thumb),
-    query: p.query ? Uint32Array.from(p.query) : undefined,
-    nameCrop: p.nameCrop,
-    chosen,
-    finish: 'nonfoil',
-    via: chosen === null ? null : 'image',
-    glare: p.glare,
-  };
+  return settlePrinting(
+    {
+      page: p.page,
+      slot: p.slot,
+      status: p.status,
+      matches: p.matches,
+      otherNameDistance: p.otherNameDistance,
+      thumbUrl: imageToDataURL(p.thumb),
+      query: p.query ? Uint32Array.from(p.query) : undefined,
+      nameCrop: p.nameCrop,
+      chosen,
+      finish: 'nonfoil',
+      via: chosen === null ? null : 'image',
+      glare: p.glare,
+      borderLuma: p.borderLuma,
+    },
+    db,
+  );
+}
+
+/**
+ * Once the name is settled, picks the most likely printing (border colour,
+ * regular over promo) and flags look-alike printings that differ in price.
+ */
+export function settlePrinting(p: PocketView, db: CardDB): PocketView {
+  if (p.chosen === null || p.via === 'manual') return p;
+  const choice = resolvePrinting(db, db.nameOf[p.chosen], p.query, p.borderLuma);
+  const status: PocketStatus = choice.ambiguous && p.status === 'matched' ? 'uncertain' : p.status;
+  return { ...p, chosen: choice.card, status, printingCheck: choice.ambiguous };
 }
 
 /** True when two captures show the same spread (most identified pockets agree). */
@@ -73,10 +93,9 @@ export function mergeInto(a: PocketView[], b: PocketView[]): PocketView[] {
   });
 }
 
-/** Printings of a name, nearest to the photographed card first. */
-export function rankPrintings(db: CardDB, nameIdx: number, query?: Uint32Array): { card: number; d: number }[] {
-  const list = db.printings[nameIdx].map((card) => ({ card, d: query ? fpDistance(query, db.fps, card) : 0 }));
-  return list.sort((x, y) => x.d - y.d);
+/** Printings of a name, most likely for this photo first. */
+export function rankPrintings(db: CardDB, nameIdx: number, pocket?: Pick<PocketView, 'query' | 'borderLuma'>): RankedPrinting[] {
+  return rankPrintingsCore(db, nameIdx, pocket?.query, pocket?.borderLuma);
 }
 
 /** Applies an OCR reading of the title line to a pocket. */
@@ -84,13 +103,12 @@ export function applyOcr(p: PocketView, text: string, db: CardDB): PocketView {
   const hits = db.fuzzyNames(text, 3);
   const top = hits[0];
   if (!top || top.score < 0.45) return { ...p, ocrText: text };
-  const printings = rankPrintings(db, top.name, p.query);
-  const best = printings[0];
+  const choice = resolvePrinting(db, top.name, p.query, p.borderLuma);
   // The text agrees with one of the image candidates, or is a clean read on its own.
   const agreesWithImage = p.matches.some((m) => db.nameOf[m.card] === top.name);
   const strongRead = top.score >= 0.75 && (hits[1]?.score ?? 0) < top.score - 0.15;
-  const status: PocketStatus = agreesWithImage || strongRead ? 'matched' : 'uncertain';
-  return { ...p, ocrText: text, chosen: best.card, status, via: 'text' };
+  const status: PocketStatus = (agreesWithImage || strongRead) && !choice.ambiguous ? 'matched' : 'uncertain';
+  return { ...p, ocrText: text, chosen: choice.card, status, via: 'text', printingCheck: choice.ambiguous };
 }
 
 export function needsOcr(p: PocketView): boolean {

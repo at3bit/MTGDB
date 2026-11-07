@@ -2,6 +2,7 @@
 import { get, set } from 'idb-keyval';
 import type { Calibration, Rotation } from '../core/geometry.ts';
 import type { CardDB, Finish } from '../core/carddb.ts';
+import type { Baseline } from '../core/baselines.ts';
 import { cardPrice, type LivePrices } from './session.ts';
 
 export interface SavedCalibration {
@@ -85,9 +86,19 @@ export interface Trend {
   vsAvg: number;
   avg: number;
   days: number;
+  source: 'market' | 'local';
 }
 
-export function trendFor(hist: PriceHistory, id: string, finish: Finish, current: number | null): Trend | null {
+/**
+ * Price trend for one owned card. Uses the market-wide 30-day baseline (from
+ * MTGJSON's TCGplayer history) when there is one, otherwise the daily prices
+ * this phone has recorded since the card was scanned.
+ */
+export function trendFor(hist: PriceHistory, id: string, finish: Finish, current: number | null, baseline?: Baseline | null): Trend | null {
+  if (baseline && baseline.avg30 > 0) {
+    // Compare like with like: latest vs average from the same price series.
+    return { vsAvg: baseline.latest / baseline.avg30 - 1, avg: baseline.avg30, days: 30, source: 'market' };
+  }
   const list = hist[historyKey(id, finish)];
   if (!list || current == null) return null;
   const today = new Date().toISOString().slice(0, 10);
@@ -96,5 +107,5 @@ export function trendFor(hist: PriceHistory, id: string, finish: Finish, current
   if (prior.length < 3) return null;
   const avg = prior.reduce((s, [, p]) => s + p, 0) / prior.length;
   if (avg <= 0) return null;
-  return { vsAvg: current / avg - 1, avg, days: prior.length };
+  return { vsAvg: current / avg - 1, avg, days: prior.length, source: 'local' };
 }

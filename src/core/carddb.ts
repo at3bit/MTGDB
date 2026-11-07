@@ -3,15 +3,20 @@
 //
 // cards.json
 //   { v: 1, built: ISO date, source: string, sets: { code: name },
-//     cards: [ [id, name, set, collectorNumber, rarity, finishBits, usd, usdFoil, usdEtched], ... ] }
+//     cards: [ [id, name, set, collectorNumber, rarity, finishBits, usd, usdFoil, usdEtched, border, priority], ... ] }
 //   finishBits: 1 = nonfoil, 2 = foil, 4 = etched. Prices are numbers or null.
+//   border: b black, w white, x borderless, s silver, g gold, y yellow ('' unknown).
+//   priority: 0 regular printing, 1 The List reprint, 2 promo / collectible variant.
 //
 // fingerprints.bin (little endian)
 //   "MTGF" | u32 version (1) | u32 count | u32 wordsPerEntry (5) | count * 5 * u32
 //   Entry i belongs to cards[i].
 import { FP_WORDS } from './fingerprint.ts';
 
-export type CardRow = [string, string, string, string, string, number, number | null, number | null, number | null];
+export type CardRow = [string, string, string, string, string, number, number | null, number | null, number | null, string?, number?];
+
+export type BorderColor = 'black' | 'white' | 'borderless' | 'silver' | 'gold' | 'yellow' | 'unknown';
+const BORDERS: Record<string, BorderColor> = { b: 'black', w: 'white', x: 'borderless', s: 'silver', g: 'gold', y: 'yellow' };
 
 export interface CardsFile {
   v: 1;
@@ -35,6 +40,9 @@ export interface CardInfo {
   rarity: string;
   finishes: Finish[];
   prices: Record<Finish, number | null>;
+  border: BorderColor;
+  /** 0 regular printing, 1 The List reprint, 2 promo / collectible variant. */
+  priority: number;
 }
 
 const MAGIC = 0x4647544d; // "MTGF" read as little-endian u32
@@ -140,6 +148,8 @@ export class CardDB {
       rarity: r[4],
       finishes: finishes.length ? finishes : ['nonfoil'],
       prices: { nonfoil: r[6], foil: r[7], etched: r[8] },
+      border: BORDERS[r[9] ?? ''] ?? 'unknown',
+      priority: r[10] ?? 0,
     };
   }
 

@@ -73,6 +73,7 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, ocrPen
                         <button key={p.slot} className={`tile ${p.status}`} onClick={() => setOpen({ spread: s.id, page: p.page, slot: p.slot })}>
                           <img src={p.thumbUrl} alt={info?.name ?? 'pocket'} />
                           <div className="name">{info ? info.name : STATUS_LABEL[p.status] || '—'}</div>
+                          {p.printingCheck && <div className="price" style={{ color: 'var(--warn)' }}>Which printing?</div>}
                           <div className="price">
                             {info ? `${info.set.toUpperCase()} · ${formatUSD(pocketPrice(db, p, live))}` : ' '}
                             {p.finish !== 'nonfoil' && ' ✦'}
@@ -125,9 +126,9 @@ function PocketSheet({ db, live, pocket, onChange, onReadName, onClose }: SheetP
   const info = pocket.chosen !== null ? db.info(pocket.chosen) : null;
   const choose = (card: number) => {
     const fin = db.info(card).finishes;
-    onChange({ ...pocket, chosen: card, status: 'matched', via: 'manual', finish: fin.includes(pocket.finish) ? pocket.finish : fin[0] });
+    onChange({ ...pocket, chosen: card, status: 'matched', via: 'manual', printingCheck: false, finish: fin.includes(pocket.finish) ? pocket.finish : fin[0] });
   };
-  const printings = info ? rankPrintings(db, db.nameOf[info.index], pocket.query).slice(0, 30) : [];
+  const printings = info ? rankPrintings(db, db.nameOf[info.index], pocket).slice(0, 30) : [];
   const otherNames: number[] = [];
   for (const m of pocket.matches) {
     const n = db.nameOf[m.card];
@@ -171,6 +172,12 @@ function PocketSheet({ db, live, pocket, onChange, onReadName, onClose }: SheetP
           <h3>{pocket.status === 'empty' ? 'Empty pocket' : 'Not identified'}</h3>
         )}
         {pocket.ocrText != null && <div className="muted small" style={{ marginTop: 6 }}>Name read as “{pocket.ocrText || '…'}”</div>}
+        {pocket.printingCheck && (
+          <div className="notice" style={{ marginTop: 12, marginBottom: 0 }}>
+            Several printings of this card look the same from the front but are priced differently. Check the set symbol, border and
+            corners, then tap the right one below (or tap the current one to confirm it).
+          </div>
+        )}
 
         {printings.length > 1 && (
           <>
@@ -217,7 +224,7 @@ function PocketSheet({ db, live, pocket, onChange, onReadName, onClose }: SheetP
         {results.length > 0 && (
           <ul className="list">
             {results.map((n) => {
-              const best = rankPrintings(db, n, pocket.query)[0];
+              const best = rankPrintings(db, n, pocket)[0];
               return (
                 <li key={n} className="tap" onClick={() => { choose(best.card); setQuery(''); }}>
                   <div className="grow ellipsis">{db.names[n]}</div>

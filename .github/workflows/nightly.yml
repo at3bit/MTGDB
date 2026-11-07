@@ -50,6 +50,10 @@ jobs:
           key: card-data-${{ github.run_id }}
           restore-keys: card-data-
       - run: npm run data
+      # Market price baselines for sell signals. If MTGJSON is unavailable the
+      # app still works; it just falls back to price history it records itself.
+      - run: npm run baselines
+        continue-on-error: true
       - run: npm run build
 
       - uses: actions/upload-artifact@v4
