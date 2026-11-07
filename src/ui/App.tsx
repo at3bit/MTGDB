@@ -57,6 +57,19 @@ export function App() {
         setDbStatus({ loading: null, error: null, missing: false });
         setHistory(await recordPrices(loaded, col, lp));
         setBaselines(await loadBaselines(loaded));
+        // Prices for the cards you own are refreshed from Scryfall at most twice a day, quietly.
+        const ids = [...new Set(col.binders.flatMap((b) => b.cards.map((c) => c.id)))];
+        const stale = ids.some((id) => !lp[id] || Date.now() - Date.parse(lp[id].at) > 12 * 3600_000);
+        if (ids.length && stale && navigator.onLine !== false) {
+          try {
+            const merged = { ...lp, ...(await fetchLivePrices(ids)) };
+            await saveLivePrices(merged);
+            setLive(merged);
+            setHistory(await recordPrices(loaded, col, merged));
+          } catch (e) {
+            console.warn('Automatic price refresh failed', e);
+          }
+        }
       } catch (e) {
         setDbStatus({ loading: null, error: (e as Error).message, missing: e instanceof MissingDataError });
       }

@@ -1,34 +1,29 @@
-# Rebuilds the card database from Scryfall (prices + any new sets) and deploys
-# the app to Vercel. Runs nightly, on demand, and on pushes to main.
+# CI for every push, plus an optional nightly redeploy.
 #
-# One-time setup (repo Settings › Secrets and variables › Actions):
-#   VERCEL_TOKEN        a token from vercel.com/account/tokens
-#   VERCEL_ORG_ID       from .vercel/project.json after `npx vercel link`
-#   VERCEL_PROJECT_ID   same file
-# Without them the workflow still builds and tests, and keeps the built site as
-# a downloadable artifact.
-#
-# Scheduled and push runs are off until you opt in by adding a repository
-# variable NIGHTLY_ENABLED = true (Settings › Secrets and variables › Actions ›
-# Variables). You can always start a run by hand from the Actions tab.
-name: Nightly data + deploy
+# Vercel builds the site itself (including the card database) on every push to
+# main, using `npm run build:full` from vercel.json. The app refreshes prices
+# for the cards you own straight from Scryfall each day, so a nightly rebuild
+# is optional. It picks up newly released sets and refreshes the 30-day price
+# averages. To turn it on:
+#   1. Vercel › mtgdb project › Settings › Git › Deploy Hooks: create a hook for
+#      branch "main" and copy its URL.
+#   2. GitHub › repo Settings › Secrets and variables › Actions: add a secret
+#      named VERCEL_DEPLOY_HOOK with that URL.
+name: CI and nightly refresh
 
 on:
+  push:
+    branches: [main]
+  pull_request:
   schedule:
     - cron: '23 11 * * *' # daily, after Scryfall's price refresh
   workflow_dispatch:
-  push:
-    branches: [main]
-
-concurrency:
-  group: nightly
-  cancel-in-progress: false
 
 jobs:
-  build:
-    if: ${{ github.event_name == 'workflow_dispatch' || vars.NIGHTLY_ENABLED == 'true' }}
+  test:
+    if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -38,34 +33,16 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
-
-      # Fingerprints only need recomputing for new or re-scanned card images, so
-      # keep the previous build's data between runs. The first run fingerprints
-      # every printing (~100k images) and takes the longest.
-      - uses: actions/cache@v4
-        with:
-          path: |
-            public/data
-            data-cache
-          key: card-data-${{ github.run_id }}
-          restore-keys: card-data-
-      - run: npm run data
-      # Market price baselines for sell signals. If MTGJSON is unavailable the
-      # app still works; it just falls back to price history it records itself.
-      - run: npm run baselines
-        continue-on-error: true
       - run: npm run build
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: site
-          path: dist
-          retention-days: 7
-
-      - name: Deploy to Vercel
+  refresh:
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ask Vercel to rebuild with fresh card data
         env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        if: ${{ env.VERCEL_TOKEN != '' }}
-        run: npx --yes vercel@65.10.0 deploy dist --prod --yes --token "$VERCEL_TOKEN"
+          HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then echo "VERCEL_DEPLOY_HOOK is not set; skipping."; exit 0; fi
+          curl -fsS -X POST "$HOOK"

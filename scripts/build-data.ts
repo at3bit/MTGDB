@@ -8,7 +8,7 @@
 // Scryfall asks API users to send a descriptive User-Agent and to keep API
 // requests to ~10/s. Only one API request is made (the bulk-data listing);
 // card images come from their CDN, fetched a few at a time.
-import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
@@ -22,7 +22,8 @@ import { decodeFingerprints, encodeFingerprints, type CardRow, type CardsFile } 
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = join(root, 'public', 'data');
-const cacheDir = join(root, 'data-cache');
+// Vercel keeps node_modules between builds, so fingerprints cached there are reused on the next deploy.
+const cacheDir = process.env.MTGDB_CACHE_DIR ?? (process.env.VERCEL ? join(root, 'node_modules', '.cache', 'mtgdb') : join(root, 'data-cache'));
 const UA = 'MTGDB-binder-scanner/0.1 (personal collection tool)';
 const args = process.argv.slice(2);
 const limit = args.includes('--limit') ? Number(args[args.indexOf('--limit') + 1]) : Infinity;
@@ -117,10 +118,12 @@ async function main() {
   // Reuse fingerprints from the previous build where the image URL (which carries a version stamp) is unchanged.
   const prevMapPath = join(cacheDir, 'fingerprint-sources.json');
   const prev = new Map<string, Uint32Array>();
-  if (existsSync(prevMapPath) && existsSync(join(outDir, 'fingerprints.bin'))) {
+  // The previous build's output, from the cache (CI / Vercel) or from public/data (local).
+  const prevDir = existsSync(join(cacheDir, 'fingerprints.bin')) ? cacheDir : outDir;
+  if (existsSync(prevMapPath) && existsSync(join(prevDir, 'fingerprints.bin')) && existsSync(join(prevDir, 'cards.json'))) {
     const srcs: Record<string, string> = JSON.parse(readFileSync(prevMapPath, 'utf8'));
-    const old = JSON.parse(readFileSync(join(outDir, 'cards.json'), 'utf8')) as CardsFile;
-    const buf = readFileSync(join(outDir, 'fingerprints.bin'));
+    const old = JSON.parse(readFileSync(join(prevDir, 'cards.json'), 'utf8')) as CardsFile;
+    const buf = readFileSync(join(prevDir, 'fingerprints.bin'));
     const fps = decodeFingerprints(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer);
     old.cards.forEach((r, i) => {
       const src = srcs[r[0]];
@@ -180,6 +183,8 @@ async function main() {
   writeFileSync(join(outDir, 'cards.json'), JSON.stringify(file));
   writeFileSync(join(outDir, 'fingerprints.bin'), encodeFingerprints(outFps, keep.length));
   writeFileSync(prevMapPath, JSON.stringify(Object.fromEntries(keep.map((i) => [rows[i][0], images[i]]))));
+  copyFileSync(join(outDir, 'cards.json'), join(cacheDir, 'cards.json'));
+  copyFileSync(join(outDir, 'fingerprints.bin'), join(cacheDir, 'fingerprints.bin'));
   console.log(`Wrote ${keep.length} cards (${failed} failed) to public/data/`);
 }
 

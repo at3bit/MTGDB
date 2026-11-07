@@ -21,7 +21,8 @@ describe('price baselines', () => {
   it('market baseline drives the trend; local history is the fallback', () => {
     const t = trendFor({}, 'x', 'nonfoil', 12.5, b.get(0, 'nonfoil'))!;
     expect(t.source).toBe('market');
-    expect(t.vsAvg).toBeCloseTo(0.2);
+    expect(t.vsAvg).toBeCloseTo(0.25); // today's price 12.5 vs 30-day average 10
+    expect(trendFor({}, 'x', 'nonfoil', null, b.get(0, 'nonfoil'))!.vsAvg).toBeCloseTo(0.2); // falls back to the baseline's latest
     expect(t.avg).toBe(10);
     const day = (n: number) => new Date(Date.now() - n * 86400_000).toISOString().slice(0, 10);
     const local = trendFor({ 'x:nonfoil': [[day(3), 4], [day(2), 4], [day(1), 4]] }, 'x', 'nonfoil', 5, null)!;

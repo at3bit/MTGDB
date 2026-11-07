@@ -96,8 +96,10 @@ export interface Trend {
  */
 export function trendFor(hist: PriceHistory, id: string, finish: Finish, current: number | null, baseline?: Baseline | null): Trend | null {
   if (baseline && baseline.avg30 > 0) {
-    // Compare like with like: latest vs average from the same price series.
-    return { vsAvg: baseline.latest / baseline.avg30 - 1, avg: baseline.avg30, days: 30, source: 'market' };
+    // Scryfall's USD price and MTGJSON's TCGplayer history are the same series (they agree to within 1% for
+    // 95% of cards), so today's price, refreshed on the phone, can be compared with the 30-day average.
+    const now = current ?? baseline.latest;
+    return { vsAvg: now / baseline.avg30 - 1, avg: baseline.avg30, days: 30, source: 'market' };
   }
   const list = hist[historyKey(id, finish)];
   if (!list || current == null) return null;

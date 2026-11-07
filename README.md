@@ -46,10 +46,10 @@ link. Each person's collection is stored only on their own phone.
 
 ## Prices and sell signals
 
-- Prices are TCGplayer market prices in USD. They come from the card database,
-  which the nightly GitHub Action rebuilds (Scryfall updates prices about once
-  a day). **Refresh prices** also pulls current prices for the cards you own
-  straight from Scryfall's API.
+- Prices are TCGplayer market prices in USD, via Scryfall, which updates them
+  about once a day. The app refreshes prices for the cards you own from
+  Scryfall's API automatically (at most twice a day), or right away with
+  **Refresh prices**.
 - **Worth selling now** lists cards trading at least 20% (and $1) above their
   own 30-day average. The average comes from MTGJSON's 90-day TCGplayer
   history (`npm run baselines`), so it works from the first day. Without that
@@ -84,15 +84,22 @@ npm run e2e          # end-to-end browser test with a synthetic binder video (af
 
 ## Deploying
 
-The site is fully static. The included workflow (`.github/workflows/nightly.yml`)
-builds the data, tests, builds and deploys to Vercel once you add
-`VERCEL_TOKEN`, `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID` as repository secrets.
-It only runs on its own (nightly and on pushes to `main`) once you add a
-repository variable `NIGHTLY_ENABLED` set to `true`. You can always start a run
-by hand from the Actions tab. The first run fingerprints every card image, so it
-takes the longest. Later runs reuse the cached fingerprints.
-Any static host works, but it needs **https**, because Safari only allows camera
-access on secure pages.
+The app is hosted on Vercel, linked to this GitHub repository. Every push to
+`main` deploys: Vercel runs `npm run build:full` (see `vercel.json`), which
+builds the card database, the price baselines and the site. The first build
+fingerprints every card image (about 10 minutes). Later builds reuse the
+fingerprints Vercel keeps in its build cache and take about a minute.
+
+Prices for the cards you own refresh on the phone from Scryfall's API, at most
+twice a day, so the site doesn't need rebuilding to stay current. A nightly
+rebuild is optional: it picks up new sets and refreshes the 30-day averages.
+To turn it on, create a Deploy Hook in the Vercel project (Settings › Git) and
+save its URL as the GitHub secret `VERCEL_DEPLOY_HOOK`. The workflow in
+`.github/workflows/nightly.yml` calls it daily and runs the tests on every
+push.
+
+Any static host works, but it needs **https**, because Safari only allows
+camera access on secure pages.
 
 On the iPhone: open the URL in Safari › Share › **Add to Home Screen**.
 
