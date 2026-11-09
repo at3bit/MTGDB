@@ -55,7 +55,8 @@ const save = (k: string, v: string) => {
 };
 
 export function ChangeBadge({ trend }: { trend: Trend | null }) {
-  if (!trend || trend.gain30 == null || trend.pct30 == null || Math.abs(trend.gain30) < 0.01) return null;
+  // Hide noise: show a change of at least 5 cents and 1%.
+  if (!trend || trend.gain30 == null || trend.pct30 == null || Math.abs(trend.gain30) < 0.05 || Math.abs(trend.pct30) < 0.01) return null;
   const up = trend.gain30 > 0;
   return (
     <span className={`badge ${up ? 'up' : 'down'}`} title="Change over the last 30 days">

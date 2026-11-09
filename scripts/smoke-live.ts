@@ -110,6 +110,20 @@ try {
   const toCheck = tiles.filter((t) => /uncertain|unknown/.test(t.cls)).length;
   console.log(`spreads: ${spreads}; right card name: ${right}/${tiles.length}; flagged to check: ${toCheck}`);
   console.log(`total shown: ${await page.locator('.big-number').first().textContent()}`);
+  // A look-alike printing: the chooser shows your card's set symbol beside each printing's.
+  const which = page.locator('.tile', { hasText: 'Which printing?' }).first();
+  if (await which.count()) {
+    await which.click();
+    await page.getByRole('dialog').waitFor();
+    await page.waitForTimeout(2500); // let Scryfall images load
+    await page.screenshot({ path: join(out, 'which-printing.png'), fullPage: false });
+    console.log(`printing chooser: ${await page.locator('.sheet .symbol-zoom').count()} symbol crops shown`);
+    await page.getByRole('button', { name: 'Done' }).click();
+  }
+  await page.getByRole('button', { name: 'List', exact: true }).click();
+  await page.getByLabel('Sort by').selectOption('price');
+  await page.waitForTimeout(1500);
+  await page.screenshot({ path: join(out, 'review-list.png'), fullPage: false });
   if (spreads !== 2 || right < tiles.length - 2) failed = true;
 } catch (e) {
   failed = true;
