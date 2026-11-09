@@ -15,7 +15,8 @@
     "postinstall": "node scripts/copy-vendor.mjs",
     "eval": "NODE_USE_ENV_PROXY=1 tsx scripts/eval-real.ts",
     "baselines": "NODE_USE_ENV_PROXY=1 tsx scripts/build-baselines.ts",
-    "build:full": "npm run data && (npm run baselines || echo 'Price baselines skipped; the app falls back to its own price history') && npm run build",
+    "build:full": "npm run data && (npm run baselines || echo 'Price baselines skipped; the app falls back to its own price history') && npm run data:version && npm run build",
+    "data:version": "tsx scripts/data-version.ts",
     "smoke": "NODE_USE_ENV_PROXY=1 tsx scripts/smoke-live.ts",
     "sim": "NODE_USE_ENV_PROXY=1 tsx scripts/sim-binder.ts"
   },

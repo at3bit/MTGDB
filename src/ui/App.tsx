@@ -48,6 +48,8 @@ export function App() {
 
   useEffect(() => {
     (async () => {
+      // Ask the browser not to clear saved binders when it runs low on space or the site goes unused for a while.
+      navigator.storage?.persist?.().catch(() => {});
       const [col, lp, hist] = await Promise.all([loadCollection(), loadLivePrices(), loadHistory()]);
       setCollection(col);
       setLive(lp);

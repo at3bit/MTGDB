@@ -15,6 +15,7 @@ import { FP_WORDS, fingerprint } from '../src/core/fingerprint.ts';
 import { encodeFingerprints, type CardsFile } from '../src/core/carddb.ts';
 import { makeCard, renderSpread, rng, toReferenceSize, SCENE_PAGES } from '../tests/synth.ts';
 import type { RGBAImage } from '../src/core/image.ts';
+import { writeDataVersion } from './data-version.ts';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_PATH ?? 'playwright');
@@ -42,6 +43,7 @@ cards.forEach((c, i) => fps.set(fingerprint(toReferenceSize(c)), i * FP_WORDS));
 mkdirSync(join(dist, 'test-data'), { recursive: true });
 writeFileSync(join(dist, 'test-data', 'cards.json'), JSON.stringify(file));
 writeFileSync(join(dist, 'test-data', 'fingerprints.bin'), encodeFingerprints(fps, N));
+writeDataVersion(join(dist, 'test-data'));
 
 // 2. Video
 const spreadIds = [0, 1, 2].map((s) => Array.from({ length: 18 }, (_, i) => (s === 1 && i === 8 ? -1 : (s * 18 + i * 7 + 3) % N)));

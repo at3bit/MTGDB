@@ -16,36 +16,102 @@ export class MissingDataError extends Error {}
 export async function loadCardDB(onProgress?: (msg: string) => void): Promise<CardDB> {
   const base = dataBase();
   onProgress?.('Downloading card catalogue…');
-  // Bust the HTTP cache once a day so nightly price updates show up.
-  const day = new Date().toISOString().slice(0, 10);
-  const [cardsRes, fpRes] = await Promise.all([fetch(`${base}cards.json?d=${day}`), fetch(`${base}fingerprints.bin?d=${day}`)]);
-  if (cardsRes.status === 404 || fpRes.status === 404) {
-    throw new MissingDataError('The card database has not been built yet. Run `npm run data` (needs access to scryfall.com) and redeploy.');
-  }
-  if (!cardsRes.ok || !fpRes.ok) throw new Error(`Could not load card data (HTTP ${cardsRes.status}/${fpRes.status})`);
-  const contentType = cardsRes.headers.get('content-type') ?? '';
-  if (contentType.includes('text/html')) {
+  const missing = () => new MissingDataError('The card database has not been built yet. Run `npm run data` (needs access to scryfall.com) and redeploy.');
+  for (let attempt = 0; ; attempt++) {
+    const [cards, fp] = await fetchDataFiles(base, ['cards.json', 'fingerprints.bin'], attempt > 0);
     // SPA hosts often answer missing files with index.html.
-    throw new MissingDataError('The card database has not been built yet. Run `npm run data` (needs access to scryfall.com) and redeploy.');
+    if (cards.status === 404 || fp.status === 404 || cards.html) throw missing();
+    if (!cards.buf || !fp.buf) throw new Error(`Could not load card data (HTTP ${cards.status}/${fp.status})`);
+    onProgress?.('Reading card catalogue…');
+    const file = JSON.parse(new TextDecoder().decode(cards.buf)) as CardsFile;
+    const fps = decodeFingerprints(fp.buf);
+    // Copies from different deployments (one cached, one new): fetch both again from the server.
+    if ((!cards.verified || !fp.verified || fps.count !== file.cards.length) && attempt < 2) continue;
+    onProgress?.('Indexing names…');
+    return new CardDB(file, fps);
   }
-  onProgress?.('Reading card catalogue…');
-  const file = (await cardsRes.json()) as CardsFile;
-  const fps = decodeFingerprints(await fpRes.arrayBuffer());
-  onProgress?.('Indexing names…');
-  return new CardDB(file, fps);
 }
 
 /** Optional market price baselines; null when not built or out of step with the catalogue. */
 export async function loadBaselines(db: CardDB): Promise<Baselines | null> {
   try {
-    const day = new Date().toISOString().slice(0, 10);
-    const res = await fetch(`${dataBase()}baselines.bin?d=${day}`);
-    if (!res.ok || (res.headers.get('content-type') ?? '').includes('text/html')) return null;
-    const b = new Baselines(await res.arrayBuffer());
+    const [res] = await fetchDataFiles(dataBase(), ['baselines.bin'], false);
+    if (!res.buf || !res.verified) return null;
+    const b = new Baselines(res.buf);
     return b.count === db.count ? b : null;
   } catch {
     return null;
   }
+}
+
+/** Written at build time by scripts/data-version.ts: a content hash for each data file. */
+interface DataVersion {
+  built: string;
+  files: Record<string, string>;
+}
+
+const VERSION_KEY = 'mtgdb.dataVersion';
+const isHtml = (res: Response) => (res.headers.get('content-type') ?? '').includes('text/html');
+
+/** This deployment's data version; the last one seen when offline; null for builds without one. */
+async function fetchVersion(base: string): Promise<DataVersion | null> {
+  const remembered = () => {
+    try {
+      return JSON.parse(localStorage.getItem(VERSION_KEY) ?? 'null') as DataVersion | null;
+    } catch {
+      return null;
+    }
+  };
+  try {
+    const res = await fetch(`${base}version.json`, { cache: 'no-store' });
+    if (res.status === 404 || isHtml(res)) return null;
+    if (!res.ok) return remembered();
+    const v = (await res.json()) as DataVersion;
+    if (!v || typeof v.files !== 'object') return null;
+    try {
+      localStorage.setItem(VERSION_KEY, JSON.stringify(v));
+    } catch {
+      /* private mode */
+    }
+    return v;
+  } catch {
+    return remembered();
+  }
+}
+
+/** First 8 bytes of the SHA-256, in hex (as scripts/data-version.ts writes them); null where unavailable. */
+async function contentHash(buf: ArrayBuffer): Promise<string | null> {
+  if (!globalThis.crypto?.subtle) return null;
+  const d = new Uint8Array(await crypto.subtle.digest('SHA-256', buf));
+  return Array.from(d.slice(0, 8), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+interface DataFile {
+  status: number;
+  html: boolean;
+  buf: ArrayBuffer | null;
+  /** False if the file isn't the one this deployment lists (an older copy). */
+  verified: boolean;
+}
+
+/**
+ * Downloads data files by content hash (`cards.json?v=<hash>`), so the phone's HTTP cache can't hand back a
+ * copy from an earlier deployment, and checks each against its hash. `fresh` bypasses the HTTP cache.
+ * Builds without a version.json fall back to one URL per day.
+ */
+async function fetchDataFiles(base: string, names: string[], fresh: boolean): Promise<DataFile[]> {
+  const version = await fetchVersion(base);
+  const day = new Date().toISOString().slice(0, 10);
+  return Promise.all(
+    names.map(async (name): Promise<DataFile> => {
+      const want = version?.files[name];
+      const res = await fetch(`${base}${name}?${want ? `v=${want}` : `d=${day}`}`, { cache: fresh ? 'reload' : 'default' });
+      if (!res.ok || isHtml(res)) return { status: res.status, html: isHtml(res), buf: null, verified: false };
+      const buf = await res.arrayBuffer();
+      const got = want ? await contentHash(buf) : null;
+      return { status: res.status, html: false, buf, verified: got === null || got === want };
+    }),
+  );
 }
 
 export interface SpreadReading {

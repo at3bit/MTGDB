@@ -115,6 +115,7 @@ tests/         unit tests + synthetic binder renderer
 npm install          # also copies the OCR engine into public/vendor
 npm run data         # build public/data/ from Scryfall (needs internet; ~10 min the first time, ~1 min after)
 npm run baselines    # 30/90-day price baselines from MTGJSON (run after data; ~2 min)
+npm run data:version # public/data/version.json: content hashes of the data files (run last)
 npm run eval         # accuracy on real card scans in simulated binder photos (after data)
 npm run smoke -- https://mtgdb.vercel.app   # upload a real-card binder video to a deployed site and check the results
 npm run sim          # simulate scanning a big binder (drifting pages, nudges, auto-exposure, resting hands) and report losses
@@ -134,6 +135,12 @@ The app is hosted on Vercel, linked to this GitHub repository. Every push to
 builds the card database, the price baselines and the site. The first build
 fingerprints every card image (about 10 minutes). Later builds reuse the
 fingerprints Vercel keeps in its build cache and take about a minute.
+
+Every build rebuilds the catalogue from Scryfall's latest data, so the data
+files change from one deployment to the next. `version.json` lists a content
+hash for each file; the app asks for `cards.json?v=<hash>` and so on, and checks
+what it receives, so a phone never pairs a cached file from one deployment with
+a file from another.
 
 Prices for the cards you own refresh on the phone from Scryfall's API, at most
 twice a day, so the site doesn't need rebuilding to stay current. A nightly
