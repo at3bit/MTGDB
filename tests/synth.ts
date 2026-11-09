@@ -122,6 +122,57 @@ export interface RenderOptions {
   haze?: number;
   /** Optional occluder (e.g. a hand) as a dark ellipse in normalised coords. */
   occluder?: { x: number; y: number; rx: number; ry: number };
+  /** Out-of-focus blur: Gaussian sigma in pixels of this frame (approximated by three box blurs). */
+  defocus?: number;
+  /** Motion blur: length in pixels of this frame, along x. */
+  motion?: number;
+}
+
+/** In-place horizontal box blur of radius r (window 2r+1) on RGB, edge-clamped. */
+function boxBlurX(img: RGBAImage, r: number) {
+  if (r < 1) return;
+  const { width: W, height: H, data: d } = img;
+  const row = new Float32Array(W * 3);
+  const n = 2 * r + 1;
+  for (let y = 0; y < H; y++) {
+    const base = y * W * 4;
+    for (let x = 0; x < W; x++) for (let c = 0; c < 3; c++) row[x * 3 + c] = d[base + x * 4 + c];
+    for (let c = 0; c < 3; c++) {
+      let s = 0;
+      for (let k = -r; k <= r; k++) s += row[Math.min(W - 1, Math.max(0, k)) * 3 + c];
+      for (let x = 0; x < W; x++) {
+        d[base + x * 4 + c] = s / n;
+        s += row[Math.min(W - 1, x + r + 1) * 3 + c] - row[Math.max(0, x - r) * 3 + c];
+      }
+    }
+  }
+}
+
+function transpose(img: RGBAImage): RGBAImage {
+  const out = createRGBA(img.height, img.width);
+  for (let y = 0; y < img.height; y++) for (let x = 0; x < img.width; x++) {
+    const p = (y * img.width + x) * 4, q = (x * img.height + y) * 4;
+    out.data[q] = img.data[p]; out.data[q + 1] = img.data[p + 1]; out.data[q + 2] = img.data[p + 2]; out.data[q + 3] = img.data[p + 3];
+  }
+  return out;
+}
+
+/** Gaussian-like blur (three box passes each way) with standard deviation `sigma` pixels. */
+export function defocusBlur(img: RGBAImage, sigma: number): RGBAImage {
+  if (sigma <= 0.3) return img;
+  const r = Math.max(1, Math.round((Math.sqrt((12 * sigma * sigma) / 3 + 1) - 1) / 2));
+  for (let i = 0; i < 3; i++) boxBlurX(img, r);
+  const t = transpose(img);
+  for (let i = 0; i < 3; i++) boxBlurX(t, r);
+  const back = transpose(t);
+  img.data.set(back.data);
+  return img;
+}
+
+/** Horizontal motion blur over `length` pixels. */
+export function motionBlur(img: RGBAImage, length: number): RGBAImage {
+  boxBlurX(img, Math.round((length - 1) / 2));
+  return img;
 }
 
 export const SCENE_PAGES: Quad[] = [
@@ -187,6 +238,8 @@ export function renderSpread(cards: (RGBAImage | null)[], o: RenderOptions): Spr
       frame.data[(y * W + x) * 4 + c] = s / 9;
     }
   }
+  if (o.defocus) defocusBlur(frame, o.defocus);
+  if (o.motion) motionBlur(frame, o.motion);
   const exposure = o.exposure ?? 1;
   const cast = o.cast ?? [1, 1, 1];
   const noise = o.noise ?? 0;

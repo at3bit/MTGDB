@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import { createWorker, PSM } from 'tesseract.js';
 import { CardDB, decodeFingerprints, type CardsFile } from '../src/core/carddb.ts';
-import { recognizeSpread, type PocketResult } from '../src/core/recognize.ts';
+import { DEFAULT_RECOGNIZE, recognizeSpread, type PocketResult } from '../src/core/recognize.ts';
 import { applyOcr, settlePrinting, type PocketView } from '../src/app/session.ts';
 import type { RGBAImage } from '../src/core/image.ts';
 import { fpDistance } from '../src/core/fingerprint.ts';
@@ -34,6 +34,13 @@ const SEED = arg('--seed', 1);
 // --symbol: experiment that settles look-alike printings by comparing set-symbol crops automatically.
 // Measured over 102 ties it did no better than the default pick (51 vs 56 right), so the app doesn't do this.
 const USE_SYMBOL = process.argv.includes('--symbol');
+// Blur experiments, in % of a card's width (so 4K and 1080p are comparable): --defocus 1 = Gaussian sigma of 1% of the card width.
+const DEFOCUS = arg('--defocus', 0);
+const MOTION = arg('--motion', 0);
+// --empty-detail N: override the empty-sleeve threshold (DEFAULT_RECOGNIZE.emptyDetail).
+const EMPTY_DETAIL = arg('--empty-detail', NaN);
+// --only 0,2: run only these conditions.
+const ONLY = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1].split(',').map(Number) : null;
 /** Scryfall scan of a printing, cached on disk. */
 async function refImage(card: number): Promise<RGBAImage> {
   const id = file.cards[card][0];
@@ -114,7 +121,12 @@ interface Tally { symbolDefaultRight: number; symbolTried: number; symbolSettled
 const results: Record<string, Tally> = {};
 const label = (i: number) => `${file.cards[i][1]} (${file.cards[i][2].toUpperCase()} #${file.cards[i][3]})`;
 
-for (const cond of conditions) {
+for (const [ci, cond] of conditions.entries()) {
+  if (ONLY && !ONLY.includes(ci)) continue;
+  // Card width in this frame: a third of a page (SCENE_PAGES are ~41% of the frame width).
+  const cardPx = (cond.opts.width * 0.41) / 3;
+  if (DEFOCUS) cond.opts = { ...cond.opts, defocus: (DEFOCUS / 100) * cardPx };
+  if (MOTION) cond.opts = { ...cond.opts, motion: (MOTION / 100) * cardPx };
   const t: Tally = { symbolDefaultRight: 0, symbolTried: 0, symbolSettled: 0, symbolSettledRight: 0, symbolBestRight: 0, toReview: 0, flagged: 0, hiddenError: 0, valueError: 0, printingMisses: [], pockets: 0, imgMatched: 0, imgMatchedWrongName: 0, uncertain: 0, unknown: 0, nameRight: 0, printingRight: 0, confidentWrong: 0, trueValue: 0, foundValue: 0, failures: [] };
   const t0 = Date.now();
   for (let s = 0; s < SPREADS; s++) {
@@ -124,7 +136,9 @@ for (const cond of conditions) {
     const jpg = await sharp(Buffer.from(scene.frame.data.buffer), { raw: { width: scene.frame.width, height: scene.frame.height, channels: 4 } }).jpeg({ quality: 82 }).toBuffer();
     const dec = await sharp(jpg).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
     const frame: RGBAImage = { width: dec.info.width, height: dec.info.height, data: new Uint8ClampedArray(dec.data.buffer, dec.data.byteOffset, dec.data.byteLength) };
-    const res: PocketResult[] = recognizeSpread([frame], scene.calibration, { fps: db.fps, count: db.count, nameOf: db.nameOf });
+    const res: PocketResult[] = recognizeSpread([frame], scene.calibration, { fps: db.fps, count: db.count, nameOf: db.nameOf }, { ...DEFAULT_RECOGNIZE, ...(Number.isFinite(EMPTY_DETAIL) ? { emptyDetail: EMPTY_DETAIL } : {}), matchLowDetail: process.argv.includes('--match-low-detail') });
+    const emptyCount = res.filter((p) => p.status === 'empty').length;
+    if (emptyCount) console.log(`  spread ${s + 1}: ${emptyCount} of 18 real cards taken for empty sleeves`);
     for (const p of res) {
       const truth = ids[p.page * 9 + p.slot];
       t.pockets++;
@@ -177,7 +191,7 @@ for (const cond of conditions) {
   }
   results[cond.name] = t;
   const pct = (n: number) => `${((100 * n) / t.pockets).toFixed(1)}%`;
-  console.log(`\n== ${cond.name} (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+  console.log(`\n== ${cond.name}${DEFOCUS ? `, defocus ${DEFOCUS}% of card width` : ''}${MOTION ? `, motion blur ${MOTION}%` : ''} (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
   console.log(`  image match alone: ${pct(t.imgMatched)} confident (${t.imgMatchedWrongName} of those wrong), ${pct(t.uncertain)} uncertain, ${pct(t.unknown)} unknown`);
   console.log(`  after name reading: correct card name ${pct(t.nameRight)}, exact printing ${pct(t.printingRight)}, confidently wrong ${t.confidentWrong}`);
   console.log(`  value: true $${t.trueValue.toFixed(2)}, counted as confident $${t.foundValue.toFixed(2)}`);

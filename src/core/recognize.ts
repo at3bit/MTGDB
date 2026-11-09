@@ -26,6 +26,8 @@ export interface RecognizeConfig {
   maybeDistance: number;
   /** A pocket is empty when its fine detail (Laplacian variance at 48x67) is below this. Glare is smooth, so it doesn't count as detail. */
   emptyDetail: number;
+  /** Experiment: a low-detail pocket is only empty if it also doesn't confidently match a card (blur lowers detail too). */
+  matchLowDetail?: boolean;
 }
 
 export const DEFAULT_RECOGNIZE: RecognizeConfig = {
@@ -211,9 +213,9 @@ export function recognizePocket(pc: PocketCrop, idx: MatchIndex, cfg: RecognizeC
   const nominal = nominalWindow(cfg);
   const detail = laplacianVariance(grayRect(pc.gray, nominal, 48, 67));
   const thumbOf = (r: Rect) => resampleRGBA(pc.crop, r, THUMB_W, THUMB_H);
-  if (detail < cfg.emptyDetail) {
-    return { page: pc.page, slot: pc.slot, status: 'empty', matches: [], otherNameDistance: Infinity, sharpness: pc.sharpness, glare: pc.glare, thumb: thumbOf(nominal) };
-  }
+  const lowDetail = detail < cfg.emptyDetail;
+  const empty = (): PocketResult => ({ page: pc.page, slot: pc.slot, status: 'empty', matches: [], otherNameDistance: Infinity, sharpness: pc.sharpness, glare: pc.glare, thumb: thumbOf(nominal) });
+  if (lowDetail && !cfg.matchLowDetail) return empty();
   const windows = candidateWindows(pc.gray, cfg);
   const fps = windows.map((w) => fingerprint(pc.crop, w, pc.gray));
   // Stage 1: the two most likely placements against the whole index.
@@ -240,6 +242,7 @@ export function recognizePocket(pc: PocketCrop, idx: MatchIndex, cfg: RecognizeC
   }
   const other = best ? matches.find((m) => idx.nameOf[m.card] !== idx.nameOf[best.card]) : undefined;
   const otherD = other ? other.d : best ? best.d + 30 : Infinity;
+  if (lowDetail && !(best && best.d <= cfg.acceptDistance && otherD - best.d >= cfg.acceptMargin)) return empty();
   let status: PocketStatus = 'unknown';
   if (best && best.d <= cfg.acceptDistance && otherD - best.d >= cfg.acceptMargin) status = 'matched';
   else if (best && best.d <= cfg.maybeDistance) status = 'uncertain';

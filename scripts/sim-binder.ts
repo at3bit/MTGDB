@@ -29,7 +29,8 @@ import { createRGBA, resampleGray, toGray, type GrayImage, type RGBAImage } from
 import { DEFAULT_MOTION, SpreadWatcher } from '../src/core/motion.ts';
 import { isJunkReading, recognizeTrackedSpread } from '../src/core/scan.ts';
 import { addReading, binderEntries, mergeInto, settlePrinting, type BinderEntry, type PocketView, type Spread } from '../src/app/session.ts';
-import { renderSpread, rng, SCENE_PAGES } from '../tests/synth.ts';
+import { defocusBlur, renderSpread, rng, SCENE_PAGES } from '../tests/synth.ts';
+import { DEFAULT_RECOGNIZE } from '../src/core/recognize.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const arg = (name: string, def: number) => (process.argv.includes(name) ? Number(process.argv[process.argv.indexOf(name) + 1]) : def);
@@ -45,6 +46,10 @@ const SEED = arg('--seed', 3);
 // --legacy: the app's behaviour before empty-sleeve handling (whole-spread repeat check, no see-through/card-back handling, no de-duplication)
 const LEGACY = process.argv.includes('--legacy');
 const FPS = arg('--fps', 15); // the app samples video at 15 fps
+// --defocus P: captured frames are out of focus by a Gaussian of P% of a card's width (focus not settled when captured).
+const DEFOCUS = arg('--defocus', 0);
+// --match-low-detail: a low-detail pocket is only empty if it doesn't confidently match a card.
+const RECOGNIZE = { ...DEFAULT_RECOGNIZE, matchLowDetail: process.argv.includes('--match-low-detail') };
 const W = 1920, H = 1080;
 const r = rng(SEED);
 
@@ -269,7 +274,8 @@ let tracked: Calibration | undefined;
 const idx = { fps: db.fps, count: db.count, nameOf: db.nameOf, back: LEGACY ? undefined : db.back };
 if (!LEGACY && !db.back) console.warn('card data has no card-back fingerprint; run npm run data');
 for (const c of captures) {
-  const tr = recognizeTrackedSpread(c.frames, calibration, tracked, idx);
+  const frames = DEFOCUS ? c.frames.map((f) => defocusBlur({ ...f, data: new Uint8ClampedArray(f.data) }, (DEFOCUS / 100) * ((W * 0.41) / 3))) : c.frames;
+  const tr = recognizeTrackedSpread(frames, calibration, tracked, idx, RECOGNIZE);
   if (c.brief && isJunkReading(tr.pockets)) {
     log.push(`brief capture at ${c.time.toFixed(1)}s read as junk (${c.truthSpread >= 0 ? `spread ${c.truthSpread + 1}` : 'a page turn'}): dropped`);
     continue;
