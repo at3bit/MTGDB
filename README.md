@@ -16,12 +16,16 @@ link. Each person's collection is stored only on their own phone.
 ## How recognition works
 
 1. **Page-turn detection** (`src/core/motion.ts`). The app samples the video
-   10 times a second and compares small thumbnails, adjusted for brightness so
+   15 times a second (an uploaded video is stepped through frame by frame at
+   that rate, never played fast) and compares small thumbnails, adjusted for brightness so
    the camera's auto-exposure settling after a turn doesn't count as movement. When the view has been still
    for a moment after movement, it captures that spread. Every settled view is
    captured, and repeat captures of the same spread (a hand passed over, or
    rested on the page and lifted) are merged by card name, keeping the better
-   reading of each pocket.
+   reading of each pocket. When pages are flipped quickly, the page may never
+   be still long enough to settle, so the stillest moment of each pause is kept
+   and captured if the next turn starts first; such a capture is dropped if it
+   turns out to have caught the page mid-turn (almost nothing matches).
 2. **Page tracking** (`src/core/align.ts`, `src/core/scan.ts`). You line up
    an outline over the pages once, but in a thick binder the pages don't stay
    put: the page stacks change height as you turn (pages get bigger or smaller
@@ -71,7 +75,8 @@ link. Each person's collection is stored only on their own phone.
 
 ## Scanning controls
 
-- **Capture pages automatically** (pause about half a second per spread), or
+- **Capture pages automatically** (a quarter-second pause per spread is
+  enough; half a second is safer), or
   **When I tap Snap**. Snap page also works in automatic mode, and Space,
   Enter, → or Page Down snap too, so a Bluetooth page-turner pedal or remote
   can be the shutter. A click sound and a green flash confirm each capture.
@@ -168,6 +173,16 @@ the page):
 | 16 spreads, pages drift 29% of a card width | 46% of cards right, 3 spreads missed | 287/288 right, none wrong |
 | 24 spreads, thick binder, drift 73% of a card width | not run | 429/432 right; the 3 misses flagged orange |
 | 16 spreads, fast flipping (0.5–0.9 s pauses) | not run | 286/288 right |
+
+Flipping speed (16 spreads, `--hold-min/--hold-max`, `--no-brief` for the
+settle-only rule):
+
+| Pause between flips | Settle only, 10 samples/s | Now: 15 samples/s + quick-pause capture |
+|---|---|---|
+| 0.9–1.7 s | 99% of cards found | 99% |
+| 0.5–0.9 s | 90% | 99% |
+| 0.2–0.45 s | 56% | 97%, all 16 spreads |
+| 0.15–0.3 s | 55% | 84–96% |
 
 Binders with empty sleeves (`npm run sim -- --empty 0.3` / `0.6`), where
 empty sleeves show card backs or the next sheet's card:

@@ -4,6 +4,7 @@ import { createGray, fullRect, resampleGray, toGray } from '../src/core/image.ts
 import { fingerprint, fpDistance, phash, popcount32, FP_WORDS } from '../src/core/fingerprint.ts';
 import { CardDB, decodeFingerprints, encodeFingerprints, normalizeName, type CardsFile } from '../src/core/carddb.ts';
 import { SpreadWatcher } from '../src/core/motion.ts';
+import { isJunkReading } from '../src/core/scan.ts';
 import { makeCard, toReferenceSize } from './synth.ts';
 
 describe('geometry', () => {
@@ -145,5 +146,44 @@ describe('rotated layouts', () => {
       expect(Math.sign(Math.round((tr.x - tl.x) * 1000))).toBe(dir[0]);
       expect(Math.sign(Math.round((tr.y - tl.y) * 1000))).toBe(dir[1]);
     }
+  });
+});
+
+describe('fast page turning', () => {
+  const view = (seed: number, noise = 0) => {
+    const g = createGray(64, 36);
+    g.data.forEach((_, i) => (g.data[i] = 40 + ((i * (7 + seed)) % 50) + (noise ? ((i * 13 + noise) % 3) : 0)));
+    return g;
+  };
+  const turning = (k: number) => view(100 + k);
+
+  it('captures a pause too short to settle, using its stillest moment', () => {
+    const w = new SpreadWatcher();
+    const events: string[] = [];
+    const feed = (g: ReturnType<typeof view>) => {
+      const e = w.push(g);
+      if (!e || e.type === 'moving') return;
+      if (e.type === 'settled' && e.newSpread) { events.push('settled'); w.markCaptured(g); }
+      if (e.type === 'brief' && e.newSpread) events.push('brief');
+    };
+    for (let i = 0; i < 4; i++) feed(view(1)); // spread A, held: settles
+    for (let i = 0; i < 3; i++) feed(turning(i));
+    feed(view(2)); feed(view(2, 1)); // spread B for only two samples
+    for (let i = 3; i < 6; i++) feed(turning(i));
+    for (let i = 0; i < 4; i++) feed(view(3)); // spread C, held
+    // (a fallback frame is also kept at the start of every pause; only captures are listed here)
+    expect(events).toEqual(['settled', 'brief', 'settled']);
+  });
+
+  it('drops a quick-pause capture that caught the page mid-turn', () => {
+    const r = (m: number, u: number, e: number) => [
+      ...Array.from({ length: m }, () => ({ status: 'matched' as const })),
+      ...Array.from({ length: u }, () => ({ status: 'unknown' as const })),
+      ...Array.from({ length: e }, () => ({ status: 'empty' as const })),
+    ];
+    expect(isJunkReading(r(1, 12, 5))).toBe(true); // a blur of two pages
+    expect(isJunkReading(r(0, 0, 18))).toBe(true); // nothing readable at all
+    expect(isJunkReading(r(14, 4, 0))).toBe(false); // a real spread with a few hard cards
+    expect(isJunkReading(r(2, 0, 16))).toBe(false); // a mostly empty spread
   });
 });

@@ -21,6 +21,17 @@ function quality(pockets: PocketResult[]): PageQuality {
   };
 }
 
+/**
+ * A capture taken mid-turn (from a pause too short to settle) can catch the
+ * page in motion. Such a reading matches almost nothing: drop it rather than
+ * add a spread of unknown cards.
+ */
+export function isJunkReading(pockets: Pick<PocketResult, 'status'>[]): boolean {
+  const nonEmpty = pockets.filter((p) => p.status !== 'empty').length;
+  const matched = pockets.filter((p) => p.status === 'matched').length;
+  return matched === 0 || (nonEmpty >= 3 && matched < 0.4 * nonEmpty);
+}
+
 const better = (a: PageQuality, b: PageQuality) => a.matched > b.matched || (a.matched === b.matched && a.meanDistance < b.meanDistance - 0.5);
 
 export interface TrackedSpread {

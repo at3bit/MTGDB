@@ -54,6 +54,8 @@ export interface SpreadReading {
   /** Where the pages were found in this spread. */
   calibration: Calibration;
   retried: number[];
+  /** A tentative capture that read as junk (caught mid-turn); ignore it. */
+  discarded?: boolean;
 }
 
 type Pending = { resolve: (p: SpreadReading) => void; reject: (e: Error) => void };
@@ -78,7 +80,7 @@ export class Recognizer {
       const m = ev.data;
       if (m.type === 'spread') {
         this.inFlight--;
-        this.pending.get(m.job)?.resolve({ pockets: m.pockets, ms: m.ms, calibration: m.calibration, retried: m.retried });
+        this.pending.get(m.job)?.resolve({ pockets: m.pockets, ms: m.ms, calibration: m.calibration, retried: m.retried, discarded: m.discarded });
         this.pending.delete(m.job);
       } else if (m.type === 'error' && m.job !== undefined) {
         this.inFlight--;
@@ -90,14 +92,17 @@ export class Recognizer {
     this.worker.postMessage(msg);
   }
 
-  /** `calibration` is the user's outline; spreads with the same `runId` are tracked from one to the next. */
-  async recognize(frames: WireImage[], calibration: Calibration, runId: number) {
+  /**
+   * `calibration` is the user's outline; spreads with the same `runId` are tracked from one to the next.
+   * A `tentative` capture comes back `discarded` if it reads as junk.
+   */
+  async recognize(frames: WireImage[], calibration: Calibration, runId: number, tentative = false) {
     await this.ready;
     const job = this.nextJob++;
     this.inFlight++;
     return new Promise<SpreadReading>((resolve, reject) => {
       this.pending.set(job, { resolve, reject });
-      const msg: WorkerRequest = { type: 'spread', job, runId, frames, calibration };
+      const msg: WorkerRequest = { type: 'spread', job, runId, frames, calibration, tentative };
       this.worker.postMessage(msg, frames.map((f) => f.buffer));
     });
   }

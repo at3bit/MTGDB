@@ -90,6 +90,25 @@ await new Promise<void>((resolve, reject) => {
   ff.stdin.end();
 });
 console.log(`video: ${frames.length} frames, ${(statSync(videoPath).size / 1e6).toFixed(1)} MB`);
+// A second video with quick flips: spread 2 is on screen, still, for only a moment before the next turn.
+const fastPath = join(out, 'fast.webm');
+{
+  const fast: Uint8Array[] = [];
+  for (let i = 0; i < 1.2 * FPS; i++) fast.push(rgb(still[0][i % 3]));
+  const flip = (a: number, b: number, n: number) => { for (let i = 0; i < n; i++) fast.push(blend(still[a][0], still[b][0], i / (n - 1), 1.1 - (1.4 * i) / (n - 1))); };
+  // Spread 2 lands on the last frame of one flip and the next flip starts on the following frame:
+  // still for about 2 frames (0.13 s), too short to settle.
+  flip(0, 1, 7);
+  flip(1, 2, 7);
+  for (let i = 0; i < 1.2 * FPS; i++) fast.push(rgb(still[2][i % 3]));
+  await new Promise<void>((resolve, reject) => {
+    const ff = spawn('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', `${W}x${H}`, '-r', String(FPS), '-i', '-', '-c:v', 'libvpx-vp9', '-b:v', '6M', '-deadline', 'realtime', '-cpu-used', '8', '-g', '15', fastPath]);
+    ff.on('error', reject);
+    ff.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}`))));
+    for (const f of fast) ff.stdin.write(f);
+    ff.stdin.end();
+  });
+}
 
 // 3. Serve dist and drive the app
 const types: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.bin': 'application/octet-stream', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.gz': 'application/gzip' };
@@ -187,6 +206,22 @@ try {
   await page.screenshot({ path: join(out, '8-search.png'), fullPage: true });
   await page.getByRole('button', { name: '‹ Home' }).click();
   await page.screenshot({ path: join(out, '8-home-after.png'), fullPage: true });
+
+  // Quick flips: the middle spread never settles, so it must come from the stillest moment of its pause.
+  await page.getByRole('button', { name: 'Scan a binder' }).click();
+  await page.locator('input[type=text]').fill('Quick Flips');
+  await page.setInputFiles('[data-testid=video-input]', fastPath);
+  await page.getByRole('button', { name: 'Process video' }).waitFor({ timeout: 20000 });
+  await page.waitForTimeout(500);
+  await page.getByRole('button', { name: 'Process video' }).click();
+  await page.getByText('Review “Quick Flips”').waitFor({ timeout: 120000 });
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: join(out, '9-quick-flips.png'), fullPage: true });
+  const fastSpreads = await page.locator('strong', { hasText: /^Spread \d+$/ }).count();
+  const fastTiles: string[] = await page.locator('.tile').evaluateAll((els: Element[]) => els.map((e) => e.querySelector('.name')?.textContent ?? ''));
+  const fastRight = fastTiles.filter((n, i) => n === expected[i]).length;
+  check(fastSpreads === 3 && fastRight >= 52, `quick flips: ${fastSpreads} spreads (expected 3), ${fastRight}/${fastTiles.length} pockets right`);
+  await page.getByRole('button', { name: /Home|Discard|Cancel/ }).first().click().catch(() => {});
 } catch (e) {
   failed = true;
   console.error(e);

@@ -1,6 +1,7 @@
-// Drives a "run": samples the video 10 times a second, detects page turns,
-// grabs full-resolution frames of each settled spread and hands them to the
-// recognizer worker. The run can be paused (to re-line-up the outline as the
+// Drives a "run": samples the video 15 times a second, detects page turns,
+// grabs full-resolution frames of each settled spread (or, if the page is
+// turned again before it settles, of the stillest moment of that pause) and
+// hands them to the recognizer worker. The run can be paused (to re-line-up the outline as the
 // page stacks shift), and pages can be captured on demand with snap().
 import { SpreadWatcher } from '../core/motion.ts';
 import { calibrationBounds, type Calibration } from '../core/geometry.ts';
@@ -84,7 +85,10 @@ export class RunController {
     this.running = true;
     let bounds = calibrationBounds(this.cal);
     const jobs: Promise<void>[] = [];
-    let pending: { frames: WireImage[]; time: number; change: number; manual: boolean } | null = null;
+    /** `brief`: from a pause too short to settle, so it may have caught the page mid-turn. */
+    let pending: { frames: WireImage[]; time: number; change: number; manual: boolean; brief?: boolean } | null = null;
+    /** Frame kept from the stillest moment of a pause, in case the page is turned again before it settles. */
+    let candidate: { frame: WireImage; time: number } | null = null;
 
     const dispatch = () => {
       if (!pending) return;
@@ -93,8 +97,16 @@ export class RunController {
       this.captured++;
       jobs.push(
         this.rec
-          .recognize(p.frames, this.cal, this.runId)
-          .then((r) => this.on.spread({ ...r, time: p.time, change: p.change, manual: p.manual }))
+          .recognize(p.frames, this.cal, this.runId, p.brief)
+          .then((r) => {
+            if (r.discarded) {
+              this.captured--;
+              return;
+            }
+            // A quick-pause capture only clicks once it's known to show a page.
+            if (p.brief) this.on.captured?.('auto');
+            this.on.spread({ ...r, time: p.time, change: p.change, manual: p.manual });
+          })
           .catch((e) => this.on.error(e)),
       );
     };
@@ -132,12 +144,24 @@ export class RunController {
         this.on.captured?.('manual');
         dispatch();
       } else if (this.mode === 'auto' && ev?.type === 'settled' && ev.newSpread) {
+        candidate = null;
         this.watcher.markCaptured(thumb);
         pending = { frames: [this.reader.full(this.src.video)], time: this.src.time(), change: ev.changeFromLast, manual: false };
         this.on.captured?.('auto');
         // If the recognizer is behind, one frame is enough.
         if (this.rec.inFlight >= 2) dispatch();
+      } else if (this.mode === 'auto' && ev?.type === 'candidate') {
+        candidate = { frame: this.reader.full(this.src.video), time: this.src.time() };
+      } else if (ev?.type === 'brief') {
+        // A quick turn: the page never settled, so use the stillest moment of the pause.
+        if (this.mode === 'auto' && ev.newSpread && candidate) {
+          dispatch();
+          pending = { frames: [candidate.frame], time: candidate.time, change: ev.changeFromLast, manual: false, brief: true };
+          dispatch();
+        }
+        candidate = null;
       }
+      if (ev?.type === 'settled') candidate = null;
       status(this.watcher.state === 'moving' ? 'moving' : ev?.type === 'settled' ? 'settled' : 'watching');
       // Uploaded videos can wait for the recognizer; a live camera can't.
       if (this.src.kind === 'file') while (this.rec.inFlight >= 2) await sleep(50);

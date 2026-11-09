@@ -32,7 +32,7 @@ function waitEvent(el: EventTarget, name: string, timeoutMs = 10_000): Promise<v
   });
 }
 
-export async function openCamera(video: HTMLVideoElement, sampleFps = 10): Promise<FrameSource> {
+export async function openCamera(video: HTMLVideoElement, sampleFps = 15): Promise<FrameSource> {
   if (!navigator.mediaDevices?.getUserMedia) throw new Error('This browser does not allow camera access here. Open the app over https in Safari.');
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: false,
@@ -51,6 +51,17 @@ export async function openCamera(video: HTMLVideoElement, sampleFps = 10): Promi
   if (!video.videoWidth) await waitEvent(video, 'loadedmetadata');
   const started = performance.now();
   let stopped = false;
+  // Only sample frames the camera has actually delivered: in dim light it can run slower than we
+  // sample, and reading the same frame twice mid-turn would look like a (very short) pause.
+  let presented = 0, sampled = -1;
+  const rvfc = (video as any).requestVideoFrameCallback?.bind(video) as ((cb: (now: number, meta: { presentedFrames: number }) => void) => number) | undefined;
+  if (rvfc) {
+    const onFrame = (_now: number, meta: { presentedFrames: number }) => {
+      presented = meta.presentedFrames;
+      if (!stopped) rvfc(onFrame);
+    };
+    rvfc(onFrame);
+  }
   return {
     kind: 'camera',
     video,
@@ -59,6 +70,11 @@ export async function openCamera(video: HTMLVideoElement, sampleFps = 10): Promi
     async next() {
       if (stopped) return false;
       await new Promise((r) => setTimeout(r, 1000 / sampleFps));
+      if (rvfc && presented > 0) {
+        const deadline = performance.now() + 250;
+        while (presented === sampled && !stopped && performance.now() < deadline) await new Promise((r) => setTimeout(r, 8));
+        sampled = presented;
+      }
       return !stopped;
     },
     progress: () => NaN,
@@ -71,7 +87,7 @@ export async function openCamera(video: HTMLVideoElement, sampleFps = 10): Promi
   };
 }
 
-export async function openVideoFile(video: HTMLVideoElement, file: Blob, sampleFps = 10, onStep?: (step: string) => void): Promise<FrameSource> {
+export async function openVideoFile(video: HTMLVideoElement, file: Blob, sampleFps = 15, onStep?: (step: string) => void): Promise<FrameSource> {
   const url = URL.createObjectURL(file);
   video.muted = true;
   video.playsInline = true;
@@ -97,9 +113,11 @@ export async function openVideoFile(video: HTMLVideoElement, file: Blob, sampleF
   if (!video.videoWidth || !Number.isFinite(duration) || duration <= 0) {
     throw new Error('Couldn’t read this video’s size or length. Try recording it again with the Camera app.');
   }
-  let t = -1 / sampleFps;
-  let stopped = false;
   const step = 1 / sampleFps;
+  // Sample a little after frame boundaries (5 ms is inside a frame at 24-60 fps), so a seek never
+  // rounds onto the frame it read last time: a repeated frame mid-turn would look like a pause.
+  let t = 0.005 - step;
+  let stopped = false;
   return {
     kind: 'file',
     video,

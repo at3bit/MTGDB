@@ -26,8 +26,8 @@ import sharp from 'sharp';
 import { CardDB, decodeFingerprints, type CardsFile } from '../src/core/carddb.ts';
 import { calibrationBounds, type Calibration, type Quad } from '../src/core/geometry.ts';
 import { createRGBA, resampleGray, toGray, type GrayImage, type RGBAImage } from '../src/core/image.ts';
-import { SpreadWatcher } from '../src/core/motion.ts';
-import { recognizeTrackedSpread } from '../src/core/scan.ts';
+import { DEFAULT_MOTION, SpreadWatcher } from '../src/core/motion.ts';
+import { isJunkReading, recognizeTrackedSpread } from '../src/core/scan.ts';
 import { addReading, binderEntries, mergeInto, settlePrinting, type BinderEntry, type PocketView, type Spread } from '../src/app/session.ts';
 import { renderSpread, rng, SCENE_PAGES } from '../tests/synth.ts';
 
@@ -38,11 +38,13 @@ const STACK = arg('--stack', 0.08); // page size change from one end of the bind
 const NUDGE = arg('--nudge', 0.004); // random binder shift per page turn, fraction of frame
 const HOLD_MIN = arg('--hold-min', 0.9); // seconds the page is held still after each turn
 const HOLD_MAX = arg('--hold-max', 1.7);
+const FLIP_MIN = arg('--flip-min', 0.5); // seconds a page turn takes
+const FLIP_MAX = arg('--flip-max', 0.9);
 const EMPTY = arg('--empty', 0); // fraction of sleeves that are empty
 const SEED = arg('--seed', 3);
 // --legacy: the app's behaviour before empty-sleeve handling (whole-spread repeat check, no see-through/card-back handling, no de-duplication)
 const LEGACY = process.argv.includes('--legacy');
-const FPS = 10; // the app samples video at 10 fps
+const FPS = arg('--fps', 15); // the app samples video at 15 fps
 const W = 1920, H = 1080;
 const r = rng(SEED);
 
@@ -178,7 +180,7 @@ for (let k = 0; k < SPREADS; k++) {
   const hold = HOLD_MIN + r() * (HOLD_MAX - HOLD_MIN);
   timeline.push({ kind: 'hold', k, t0: t, t1: t + hold, handRest: r() < 0.3 ? 0.35 + r() * 0.3 : undefined });
   t += hold;
-  if (k < SPREADS - 1) { const flip = 0.5 + r() * 0.4; timeline.push({ kind: 'flip', k, t0: t, t1: t + flip }); t += flip; }
+  if (k < SPREADS - 1) { const flip = FLIP_MIN + r() * (FLIP_MAX - FLIP_MIN); timeline.push({ kind: 'flip', k, t0: t, t1: t + flip }); t += flip; }
 }
 const exposure = Array.from({ length: SPREADS }, () => 0.85 + r() * 0.3);
 const nr = rng(SEED + 99);
@@ -219,12 +221,18 @@ function frameAt(time: number): RGBAImage {
 const bounds = calibrationBounds(calibration);
 const boundsRect = { x: bounds.x0 * W, y: bounds.y0 * H, w: (bounds.x1 - bounds.x0) * W, h: (bounds.y1 - bounds.y0) * H };
 const thumbOf = (g: GrayImage) => resampleGray(g, boundsRect, 96, 54);
-const watcher = new SpreadWatcher();
-interface Captured { time: number; frames: RGBAImage[]; truthSpread: number; change: number }
+const watcher = new SpreadWatcher(process.argv.includes('--no-brief') ? { ...DEFAULT_MOTION, briefThreshold: -1 } : DEFAULT_MOTION);
+interface Captured { time: number; frames: RGBAImage[]; truthSpread: number; change: number; brief?: boolean }
 const captures: Captured[] = [];
 const log: string[] = [];
 let pending: Captured | null = null;
-const truthAt = (time: number) => { const s = timeline.find((x) => time >= x.t0 && time < x.t1); return s?.kind === 'hold' ? s.k : -1; };
+let candidate: { frame: RGBAImage; time: number; truth: number } | null = null;
+/** Which spread a frame mostly shows: the held spread, or during a turn whichever page dominates the frame. */
+const truthAt = (time: number) => {
+  const s = timeline.find((x) => time >= x.t0 && time < x.t1);
+  if (!s) return -1;
+  return s.kind === 'hold' ? s.k : (time - s.t0) / (s.t1 - s.t0) >= 0.5 ? s.k + 1 : s.k;
+};
 const total = timeline[timeline.length - 1].t1;
 console.log(`simulating a ${total.toFixed(0)} s run at ${FPS} samples/s…`);
 for (let time = 0; time < total; time += 1 / FPS) {
@@ -236,7 +244,17 @@ for (let time = 0; time < total; time += 1 / FPS) {
     captures.push(pending);
     pending = null;
   }
+  if (ev?.type === 'candidate') candidate = { frame, time, truth: truthAt(time) };
+  if (ev?.type === 'brief') {
+    if (ev.newSpread && candidate) {
+      if (pending) { captures.push(pending); pending = null; }
+      log.push(`${candidate.time.toFixed(1)}s brief pause on ${candidate.truth >= 0 ? `spread ${candidate.truth + 1}` : 'a page turn'}: change ${Number.isFinite(ev.changeFromLast) ? ev.changeFromLast.toFixed(2) : '—'} (captured the stillest moment)`);
+      captures.push({ time: candidate.time, frames: [candidate.frame], truthSpread: candidate.truth, change: ev.changeFromLast, brief: true });
+    }
+    candidate = null;
+  }
   if (ev?.type === 'settled') {
+    candidate = null;
     const tk = truthAt(time);
     log.push(`${time.toFixed(1)}s settled on ${tk >= 0 ? `spread ${tk + 1}` : 'a page turn'}: change ${Number.isFinite(ev.changeFromLast) ? ev.changeFromLast.toFixed(2) : '—'}${ev.newSpread ? '' : ' (skipped)'}`);
     if (ev.newSpread) { watcher.markCaptured(thumb); pending = { time, frames: [frame], truthSpread: tk, change: ev.changeFromLast }; }
@@ -252,6 +270,10 @@ const idx = { fps: db.fps, count: db.count, nameOf: db.nameOf, back: LEGACY ? un
 if (!LEGACY && !db.back) console.warn('card data has no card-back fingerprint; run npm run data');
 for (const c of captures) {
   const tr = recognizeTrackedSpread(c.frames, calibration, tracked, idx);
+  if (c.brief && isJunkReading(tr.pockets)) {
+    log.push(`brief capture at ${c.time.toFixed(1)}s read as junk (${c.truthSpread >= 0 ? `spread ${c.truthSpread + 1}` : 'a page turn'}): dropped`);
+    continue;
+  }
   tracked = tr.calibration;
   const pockets: PocketView[] = tr.pockets.map((p) =>
     settlePrinting({ page: p.page, slot: p.slot, status: p.status, matches: p.matches, otherNameDistance: p.otherNameDistance, thumbUrl: '', query: p.query, chosen: p.status === 'matched' || p.status === 'uncertain' ? p.matches[0]?.card ?? null : null, finish: 'nonfoil', via: 'image', glare: p.glare, borderLuma: p.borderLuma, cardBack: p.cardBack, sharpness: p.sharpness, contrast: p.contrast }, db),

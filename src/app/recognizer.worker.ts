@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 // Runs recognition off the UI thread so the camera preview stays smooth.
 import type { MatchIndex } from '../core/recognize.ts';
-import { recognizeTrackedSpread } from '../core/scan.ts';
+import { isJunkReading, recognizeTrackedSpread } from '../core/scan.ts';
 import type { Calibration } from '../core/geometry.ts';
 import type { RGBAImage } from '../core/image.ts';
 import type { WorkerRequest, WorkerResponse, WirePocket } from './protocol.ts';
@@ -26,6 +26,11 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
       const frames: RGBAImage[] = msg.frames.map((f) => ({ width: f.width, height: f.height, data: new Uint8ClampedArray(f.buffer) }));
       const prev = tracking?.runId === msg.runId ? tracking.calibration : undefined;
       const tracked = recognizeTrackedSpread(frames, msg.calibration, prev, index);
+      if (msg.tentative && isJunkReading(tracked.pockets)) {
+        // Caught the page mid-turn: keep tracking from the last good spread.
+        post({ type: 'spread', job: msg.job, pockets: [], ms: performance.now() - t0, calibration: tracked.calibration, retried: [], discarded: true });
+        return;
+      }
       tracking = { runId: msg.runId, calibration: tracked.calibration };
       const results = tracked.pockets;
       const transfer: Transferable[] = [];
