@@ -26,8 +26,12 @@ export interface RecognizeConfig {
   maybeDistance: number;
   /** A pocket is empty when its fine detail (Laplacian variance at 48x67) is below this. Glare is smooth, so it doesn't count as detail. */
   emptyDetail: number;
-  /** Experiment: a low-detail pocket is only empty if it also doesn't confidently match a card (blur lowers detail too). */
-  matchLowDetail?: boolean;
+  /**
+   * A low-detail pocket is only taken for an empty sleeve if it also doesn't confidently match a card:
+   * blur lowers detail as much as an empty sleeve does (at 2% defocus the detail test alone missed ~60% of cards).
+   * False reproduces the old detail-only test (for comparisons).
+   */
+  matchLowDetail: boolean;
 }
 
 export const DEFAULT_RECOGNIZE: RecognizeConfig = {
@@ -37,6 +41,7 @@ export const DEFAULT_RECOGNIZE: RecognizeConfig = {
   acceptMargin: 6,
   maybeDistance: 58,
   emptyDetail: 150,
+  matchLowDetail: true,
 };
 
 export type PocketStatus = 'empty' | 'matched' | 'uncertain' | 'unknown';
@@ -64,6 +69,8 @@ export interface PocketResult {
   contrast?: number;
   /** Sharp crop of the set-symbol area, for settling look-alike printings (see core/symbol.ts). */
   symbolCrop?: RGBAImage;
+  /** Identified although the photo of it is blurry (too little fine detail): worth a re-snap. */
+  blurry?: boolean;
 }
 
 /** Brightness of the printed border: median of four thin strips just inside the card's edges. */
@@ -260,6 +267,7 @@ export function recognizePocket(pc: PocketCrop, idx: MatchIndex, cfg: RecognizeC
     page: pc.page,
     slot: pc.slot,
     status,
+    blurry: lowDetail || undefined,
     matches,
     otherNameDistance: otherD,
     sharpness: pc.sharpness,

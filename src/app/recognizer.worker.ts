@@ -51,6 +51,7 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
           query: r.query ? Array.from(r.query) : undefined,
           borderLuma: r.borderLuma,
           cardBack: r.cardBack,
+          blurry: r.blurry,
           contrast: r.contrast,
           symbolCrop: r.symbolCrop ? { width: r.symbolCrop.width, height: r.symbolCrop.height, buffer: r.symbolCrop.data.buffer as ArrayBuffer } : undefined,
         };

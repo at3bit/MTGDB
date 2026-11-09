@@ -31,6 +31,8 @@ import { isJunkReading, recognizeTrackedSpread } from '../src/core/scan.ts';
 import { addReading, binderEntries, mergeInto, settlePrinting, type BinderEntry, type PocketView, type Spread } from '../src/app/session.ts';
 import { defocusBlur, renderSpread, rng, SCENE_PAGES } from '../tests/synth.ts';
 import { DEFAULT_RECOGNIZE } from '../src/core/recognize.ts';
+import { CapturePolicy, DEFAULT_CAPTURE, type CaptureSend } from '../src/core/capture.ts';
+import { focusPatches, focusScore, pageFocus } from '../src/core/focus.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const arg = (name: string, def: number) => (process.argv.includes(name) ? Number(process.argv[process.argv.indexOf(name) + 1]) : def);
@@ -48,9 +50,17 @@ const LEGACY = process.argv.includes('--legacy');
 const FPS = arg('--fps', 15); // the app samples video at 15 fps
 // --defocus P: captured frames are out of focus by a Gaussian of P% of a card's width (focus not settled when captured).
 const DEFOCUS = arg('--defocus', 0);
-// --match-low-detail: a low-detail pocket is only empty if it doesn't confidently match a card.
-const RECOGNIZE = { ...DEFAULT_RECOGNIZE, matchLowDetail: process.argv.includes('--match-low-detail') };
+// --old-empty: the detail-only empty-sleeve test (blurry cards taken for empty sleeves), for comparison.
+const RECOGNIZE = { ...DEFAULT_RECOGNIZE, matchLowDetail: !process.argv.includes('--old-empty') };
+// --refocus S: after each page turn the camera takes S seconds to refocus, starting --refocus-blur P% out of focus (default 3).
+const REFOCUS = arg('--refocus', 0);
+const REFOCUS_BLUR = arg('--refocus-blur', 3);
+// --old-capture: the capture rule before sharpest-frame capture (capture as soon as the page settles). --live: live-camera timing.
+const OLD_CAPTURE = process.argv.includes('--old-capture');
+const LIVE = process.argv.includes('--live');
 const W = 1920, H = 1080;
+/** A card's width in the frame (a third of a page). */
+const CARD_PX = (W * 0.41) / 3;
 const r = rng(SEED);
 
 // ---- the binder: sheets 0..SPREADS, each with a front and a back grid of 9 (as seen when that side faces up)
@@ -219,19 +229,27 @@ function frameAt(time: number): RGBAImage {
     }
     out.data[p + 3] = 255;
   }
-  return out;
+  const sigma = focusBlurAt(time);
+  return sigma > 0.3 ? defocusBlur(out, sigma) : out;
+}
+
+/** Defocus (Gaussian sigma, px) at a moment: the camera hunts during a turn and refocuses over REFOCUS s after it. */
+function focusBlurAt(time: number): number {
+  if (!REFOCUS) return 0;
+  const seg = timeline.find((x) => time >= x.t0 && time < x.t1) ?? timeline[timeline.length - 1];
+  const full = (REFOCUS_BLUR / 100) * CARD_PX;
+  if (seg.kind === 'flip') return full;
+  return seg.k === 0 ? 0 : full * Math.max(0, 1 - (time - seg.t0) / REFOCUS);
 }
 
 // ---- the app's capture loop
 const bounds = calibrationBounds(calibration);
 const boundsRect = { x: bounds.x0 * W, y: bounds.y0 * H, w: (bounds.x1 - bounds.x0) * W, h: (bounds.y1 - bounds.y0) * H };
 const thumbOf = (g: GrayImage) => resampleGray(g, boundsRect, 96, 54);
-const watcher = new SpreadWatcher(process.argv.includes('--no-brief') ? { ...DEFAULT_MOTION, briefThreshold: -1 } : DEFAULT_MOTION);
-interface Captured { time: number; frames: RGBAImage[]; truthSpread: number; change: number; brief?: boolean }
+const MOTION_CFG = process.argv.includes('--no-brief') ? { ...DEFAULT_MOTION, briefThreshold: -1 } : DEFAULT_MOTION;
+interface Captured { time: number; frames: RGBAImage[]; truthSpread: number; change: number; brief?: boolean; blur: number }
 const captures: Captured[] = [];
 const log: string[] = [];
-let pending: Captured | null = null;
-let candidate: { frame: RGBAImage; time: number; truth: number } | null = null;
 /** Which spread a frame mostly shows: the held spread, or during a turn whichever page dominates the frame. */
 const truthAt = (time: number) => {
   const s = timeline.find((x) => time >= x.t0 && time < x.t1);
@@ -239,33 +257,61 @@ const truthAt = (time: number) => {
   return s.kind === 'hold' ? s.k : (time - s.t0) / (s.t1 - s.t0) >= 0.5 ? s.k + 1 : s.k;
 };
 const total = timeline[timeline.length - 1].t1;
-console.log(`simulating a ${total.toFixed(0)} s run at ${FPS} samples/s…`);
-for (let time = 0; time < total; time += 1 / FPS) {
-  const frame = frameAt(time);
-  const thumb = thumbOf(toGray(frame));
-  const ev = watcher.push(thumb);
-  if (pending) {
-    if (watcher.state === 'settled' && !ev) pending.frames.push(frame);
-    captures.push(pending);
-    pending = null;
-  }
-  if (ev?.type === 'candidate') candidate = { frame, time, truth: truthAt(time) };
-  if (ev?.type === 'brief') {
-    if (ev.newSpread && candidate) {
-      if (pending) { captures.push(pending); pending = null; }
-      log.push(`${candidate.time.toFixed(1)}s brief pause on ${candidate.truth >= 0 ? `spread ${candidate.truth + 1}` : 'a page turn'}: change ${Number.isFinite(ev.changeFromLast) ? ev.changeFromLast.toFixed(2) : '—'} (captured the stillest moment)`);
-      captures.push({ time: candidate.time, frames: [candidate.frame], truthSpread: candidate.truth, change: ev.changeFromLast, brief: true });
+const blurPct = (time: number) => (focusBlurAt(time) / CARD_PX) * 100;
+console.log(`simulating a ${total.toFixed(0)} s run at ${FPS} samples/s${REFOCUS ? `, refocusing for ${REFOCUS} s after each turn (from ${REFOCUS_BLUR}% blur)` : ''}${OLD_CAPTURE ? ', old capture rule' : LIVE ? ', live-camera timing' : ''}…`);
+if (OLD_CAPTURE) {
+  const watcher = new SpreadWatcher(MOTION_CFG);
+  let pending: Captured | null = null;
+  let candidate: { frame: RGBAImage; time: number; truth: number } | null = null;
+  for (let time = 0; time < total; time += 1 / FPS) {
+    const frame = frameAt(time);
+    const thumb = thumbOf(toGray(frame));
+    const ev = watcher.push(thumb);
+    if (pending) {
+      if (watcher.state === 'settled' && !ev) pending.frames.push(frame);
+      captures.push(pending);
+      pending = null;
     }
-    candidate = null;
+    if (ev?.type === 'candidate') candidate = { frame, time, truth: truthAt(time) };
+    if (ev?.type === 'brief') {
+      if (ev.newSpread && candidate) {
+        if (pending) { captures.push(pending); pending = null; }
+        log.push(`${candidate.time.toFixed(1)}s brief pause on ${candidate.truth >= 0 ? `spread ${candidate.truth + 1}` : 'a page turn'} (captured the stillest moment)`);
+        captures.push({ time: candidate.time, frames: [candidate.frame], truthSpread: candidate.truth, change: ev.changeFromLast, brief: true, blur: blurPct(candidate.time) });
+      }
+      candidate = null;
+    }
+    if (ev?.type === 'settled') {
+      candidate = null;
+      const tk = truthAt(time);
+      log.push(`${time.toFixed(1)}s settled on ${tk >= 0 ? `spread ${tk + 1}` : 'a page turn'}${ev.newSpread ? '' : ' (skipped)'}`);
+      if (ev.newSpread) { watcher.markCaptured(thumb); pending = { time, frames: [frame], truthSpread: tk, change: ev.changeFromLast, blur: blurPct(time) }; }
+    }
   }
-  if (ev?.type === 'settled') {
-    candidate = null;
-    const tk = truthAt(time);
-    log.push(`${time.toFixed(1)}s settled on ${tk >= 0 ? `spread ${tk + 1}` : 'a page turn'}: change ${Number.isFinite(ev.changeFromLast) ? ev.changeFromLast.toFixed(2) : '—'}${ev.newSpread ? '' : ' (skipped)'}`);
-    if (ev.newSpread) { watcher.markCaptured(thumb); pending = { time, frames: [frame], truthSpread: tk, change: ev.changeFromLast }; }
+  if (pending) captures.push(pending);
+} else {
+  // The app's rules (core/capture.ts): keep the sharpest frame of each page while the view is still.
+  const policy = new CapturePolicy(calibration.pages.length, { ...DEFAULT_CAPTURE, live: LIVE }, MOTION_CFG);
+  const patches = focusPatches(calibration, W, H);
+  const slots: { frame: RGBAImage; time: number }[] = [];
+  const record = (send: CaptureSend | null) => {
+    if (!send || !send.slots.length) return;
+    const kept = send.slots.map((sl) => slots[sl]);
+    const tk = truthAt(kept[0].time);
+    const blur = Math.max(...kept.map((k) => blurPct(k.time)));
+    log.push(`${send.time.toFixed(1)}s ${send.brief ? 'brief pause' : 'captured'} ${tk >= 0 ? `spread ${tk + 1}` : 'a page turn'} (${kept.length} frame${kept.length > 1 ? 's' : ''}, blur ${blur.toFixed(1)}%)`);
+    captures.push({ time: send.time, frames: kept.map((k) => k.frame), truthSpread: tk, change: send.change, brief: send.brief, blur });
+  };
+  for (let time = 0; time < total; time += 1 / FPS) {
+    const frame = frameAt(time);
+    const g = toGray(frame);
+    const focus = pageFocus(patches, patches.map((pt) => focusScore(resampleGray(g, { x: pt.x, y: pt.y, w: pt.size, h: pt.size }, pt.size, pt.size))), calibration.pages.length);
+    const step = policy.sample(thumbOf(g), focus, time);
+    for (const sl of step.keep) slots[sl] = { frame, time };
+    record(step.send);
   }
+  record(policy.flush());
 }
-if (pending) captures.push(pending);
 
 // ---- recognition and the review screen's bookkeeping (the same functions the app uses)
 let spreads: Spread[] = [];
@@ -274,7 +320,7 @@ let tracked: Calibration | undefined;
 const idx = { fps: db.fps, count: db.count, nameOf: db.nameOf, back: LEGACY ? undefined : db.back };
 if (!LEGACY && !db.back) console.warn('card data has no card-back fingerprint; run npm run data');
 for (const c of captures) {
-  const frames = DEFOCUS ? c.frames.map((f) => defocusBlur({ ...f, data: new Uint8ClampedArray(f.data) }, (DEFOCUS / 100) * ((W * 0.41) / 3))) : c.frames;
+  const frames = DEFOCUS ? c.frames.map((f) => defocusBlur({ ...f, data: new Uint8ClampedArray(f.data) }, (DEFOCUS / 100) * CARD_PX)) : c.frames;
   const tr = recognizeTrackedSpread(frames, calibration, tracked, idx, RECOGNIZE);
   if (c.brief && isJunkReading(tr.pockets)) {
     log.push(`brief capture at ${c.time.toFixed(1)}s read as junk (${c.truthSpread >= 0 ? `spread ${c.truthSpread + 1}` : 'a page turn'}): dropped`);
@@ -365,6 +411,10 @@ const missed = [...realCards].filter((c) => !found.has(c));
 const flagged = entries.filter((e) => e.flagged).length;
 console.log('\n' + log.join('\n'));
 console.log(`\nspreads in the binder: ${SPREADS}; captures: ${captures.length}; spreads after merging repeats: ${spreads.length}`);
+{
+  const soft = captures.filter((c) => c.blur >= 1);
+  console.log(`captured frames still out of focus (blur >= 1% of a card): ${soft.length} of ${captures.length}${captures.length ? `; mean blur ${(captures.reduce((a, c) => a + c.blur, 0) / captures.length).toFixed(2)}%` : ''}`);
+}
 console.log(`cards in the binder: ${realCards.size}; saved entries: ${entries.length} (${flagged} flagged orange/red to check)`);
 console.log(`  right card, right place: ${rightPlace}`);
 console.log(`  real card, wrong place: ${wrongPlace}`);

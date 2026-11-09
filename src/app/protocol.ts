@@ -29,6 +29,7 @@ export interface WirePocket {
   cardBack?: boolean;
   contrast?: number;
   symbolCrop?: WireImage;
+  blurry?: boolean;
 }
 
 export type WorkerResponse =

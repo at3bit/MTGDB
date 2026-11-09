@@ -136,7 +136,7 @@ for (const [ci, cond] of conditions.entries()) {
     const jpg = await sharp(Buffer.from(scene.frame.data.buffer), { raw: { width: scene.frame.width, height: scene.frame.height, channels: 4 } }).jpeg({ quality: 82 }).toBuffer();
     const dec = await sharp(jpg).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
     const frame: RGBAImage = { width: dec.info.width, height: dec.info.height, data: new Uint8ClampedArray(dec.data.buffer, dec.data.byteOffset, dec.data.byteLength) };
-    const res: PocketResult[] = recognizeSpread([frame], scene.calibration, { fps: db.fps, count: db.count, nameOf: db.nameOf }, { ...DEFAULT_RECOGNIZE, ...(Number.isFinite(EMPTY_DETAIL) ? { emptyDetail: EMPTY_DETAIL } : {}), matchLowDetail: process.argv.includes('--match-low-detail') });
+    const res: PocketResult[] = recognizeSpread([frame], scene.calibration, { fps: db.fps, count: db.count, nameOf: db.nameOf }, { ...DEFAULT_RECOGNIZE, ...(Number.isFinite(EMPTY_DETAIL) ? { emptyDetail: EMPTY_DETAIL } : {}), matchLowDetail: !process.argv.includes('--old-empty') });
     const emptyCount = res.filter((p) => p.status === 'empty').length;
     if (emptyCount) console.log(`  spread ${s + 1}: ${emptyCount} of 18 real cards taken for empty sleeves`);
     for (const p of res) {

@@ -35,6 +35,8 @@ export interface PocketView {
   symbolUrl?: string;
   /** The sleeve shows the back of a card (in the sleeve's other side): treated as empty. */
   cardBack?: boolean;
+  /** Identified from a blurry photo (too little fine detail): worth re-scanning that page. */
+  blurry?: boolean;
   /**
    * The card was seen through an empty sleeve: it's really on a neighbouring
    * sheet, where it's recorded. Not counted or saved here. Recomputed after
@@ -74,6 +76,7 @@ export function toPocketView(p: WirePocket, db: CardDB): PocketView {
       glare: p.glare,
       borderLuma: p.borderLuma,
       cardBack: p.cardBack,
+      blurry: p.blurry,
       sharpness: p.sharpness,
       contrast: p.contrast,
       symbolUrl: p.symbolCrop ? imageToDataURL(p.symbolCrop, 0.9) : undefined,

@@ -1,6 +1,7 @@
 // Frame sources: the live camera, or a video recorded with the iPhone Camera
 // app and uploaded. Both are read through an HTMLVideoElement.
 import type { GrayImage } from '../core/image.ts';
+import { focusScore, pageFocus, type FocusPatch } from '../core/focus.ts';
 import type { WireImage } from './protocol.ts';
 
 export interface FrameSource {
@@ -168,9 +169,9 @@ function sized(c: HTMLCanvasElement, w: number, h: number) {
 /** Reusable canvases for reading pixels out of the video element. */
 export class FrameReader {
   private thumbCanvas = document.createElement('canvas');
-  private fullCanvas = document.createElement('canvas');
-  private keptCanvas = document.createElement('canvas');
-  private hasKept = false;
+  private focusCanvas = document.createElement('canvas');
+  /** Frames kept for sending, one slot per page (see core/capture.ts). */
+  private slots: HTMLCanvasElement[] = [];
 
   /** Gray thumbnail of a normalised region of the current frame (used for page-turn detection). */
   thumb(video: HTMLVideoElement, region: { x0: number; y0: number; x1: number; y1: number }, w = 96, h = 54): GrayImage {
@@ -183,36 +184,51 @@ export class FrameReader {
     return { width: w, height: h, data: g };
   }
 
-  /** Full-resolution copy of the current frame. */
-  full(video: HTMLVideoElement): WireImage {
-    const c = sized(this.fullCanvas, video.videoWidth, video.videoHeight);
-    const ctx = context(c, true);
-    ctx.drawImage(video, 0, 0);
-    const img = ctx.getImageData(0, 0, c.width, c.height);
-    return { width: c.width, height: c.height, buffer: img.data.buffer as ArrayBuffer };
+  /** Focus score of each page of the current frame, from small full-resolution patches. */
+  focus(video: HTMLVideoElement, patches: FocusPatch[], pages: number): number[] {
+    if (!patches.length) return new Array(pages).fill(0);
+    const total = patches.reduce((a, p) => a + p.size, 0);
+    const tall = Math.max(...patches.map((p) => p.size));
+    const ctx = context(sized(this.focusCanvas, total, tall), true);
+    let x = 0;
+    for (const p of patches) {
+      ctx.drawImage(video, p.x, p.y, p.size, p.size, x, 0, p.size, p.size);
+      x += p.size;
+    }
+    const d = ctx.getImageData(0, 0, total, tall).data;
+    x = 0;
+    const scores = patches.map((p) => {
+      const g = new Float32Array(p.size * p.size);
+      for (let yy = 0; yy < p.size; yy++) {
+        for (let xx = 0; xx < p.size; xx++) {
+          const i = (yy * total + x + xx) * 4;
+          g[yy * p.size + xx] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+        }
+      }
+      x += p.size;
+      return focusScore({ width: p.size, height: p.size, data: g });
+    });
+    return pageFocus(patches, scores, pages);
   }
 
-  /**
-   * Keeps the current frame in case it's needed later (the stillest moment of a quick pause).
-   * Only a copy on the canvas: the 4K pixels (33 MB) are read out by kept() only if it's used.
-   */
-  keep(video: HTMLVideoElement) {
-    const c = sized(this.keptCanvas, video.videoWidth, video.videoHeight);
-    context(c, false).drawImage(video, 0, 0);
-    this.hasKept = true;
+  /** Keeps a copy of the current frame in a slot. Only a canvas copy: the 4K pixels (33 MB) are read out by read(). */
+  keep(video: HTMLVideoElement, slot: number) {
+    const c = (this.slots[slot] ??= document.createElement('canvas'));
+    context(sized(c, video.videoWidth, video.videoHeight), false).drawImage(video, 0, 0);
   }
 
-  /** The frame last kept with keep(), or null. */
-  kept(): WireImage | null {
-    if (!this.hasKept) return null;
-    this.hasKept = false;
-    const c = this.keptCanvas;
-    const img = context(c, false).getImageData(0, 0, c.width, c.height);
-    return { width: c.width, height: c.height, buffer: img.data.buffer as ArrayBuffer };
+  /** Full-resolution pixels of kept frames. */
+  read(slots: number[]): WireImage[] {
+    return slots.map((s) => {
+      const c = this.slots[s];
+      const img = context(c, false).getImageData(0, 0, c.width, c.height);
+      return { width: c.width, height: c.height, buffer: img.data.buffer as ArrayBuffer };
+    });
   }
 
-  dropKept() {
-    this.hasKept = false;
+  /** The canvas holding a kept frame (for saving a diagnostics copy). */
+  slotCanvas(slot: number): HTMLCanvasElement | undefined {
+    return this.slots[slot];
   }
 }
 
