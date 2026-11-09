@@ -1,7 +1,8 @@
 // Turns captured frames of an open binder into per-pocket card matches.
 import { CARD_ASPECT, homography, applyH, pocketQuads, warpQuad, type Calibration, type Quad } from './geometry.ts';
-import { glareFraction, laplacianVariance, resampleGray, resampleRGBA, toGray, type GrayImage, type RGBAImage, type Rect } from './image.ts';
+import { glareFraction, laplacianVariance, meanStd, resampleGray, resampleRGBA, toGray, type GrayImage, type RGBAImage, type Rect } from './image.ts';
 import { fingerprint, fpDistance, REGION, type Match } from './fingerprint.ts';
+import { SYMBOL_H, SYMBOL_REGION, SYMBOL_W } from './symbol.ts';
 
 /** Pocket crops are warped to this size (card aspect, including the expansion margin). */
 export const POCKET_W = 264;
@@ -55,6 +56,12 @@ export interface PocketResult {
   query?: Uint32Array;
   /** Mean brightness (0..255) of the card's printed border; tells black-bordered printings from white/gold ones. */
   borderLuma?: number;
+  /** The sleeve shows a card back (a card in the sleeve's other side). Status is 'empty'. */
+  cardBack?: boolean;
+  /** Contrast (std-dev of brightness) of the card; cards seen through extra sleeve layers are flatter. */
+  contrast?: number;
+  /** Sharp crop of the set-symbol area, for settling look-alike printings (see core/symbol.ts). */
+  symbolCrop?: RGBAImage;
 }
 
 /** Brightness of the printed border: median of four thin strips just inside the card's edges. */
@@ -76,6 +83,8 @@ export interface MatchIndex {
   fps: Uint32Array;
   count: number;
   nameOf: Int32Array;
+  /** Fingerprint of the Magic card back: a sleeve showing it holds no card on this side. */
+  back?: Uint32Array;
 }
 
 interface PocketCrop {
@@ -222,23 +231,28 @@ export function recognizePocket(pc: PocketCrop, idx: MatchIndex, cfg: RecognizeC
     });
   }
   const best = matches[0];
+  if (idx.back) {
+    // An empty sleeve whose other side holds a card shows that card's back.
+    const dBack = Math.min(...fps.map((q) => fpDistance(q, idx.back!, 0)));
+    if (dBack <= cfg.acceptDistance && (!best || dBack < best.d)) {
+      return { page: pc.page, slot: pc.slot, status: 'empty', cardBack: true, matches: [], otherNameDistance: Infinity, sharpness: pc.sharpness, glare: pc.glare, thumb: thumbOf(nominal) };
+    }
+  }
   const other = best ? matches.find((m) => idx.nameOf[m.card] !== idx.nameOf[best.card]) : undefined;
   const otherD = other ? other.d : best ? best.d + 30 : Infinity;
   let status: PocketStatus = 'unknown';
   if (best && best.d <= cfg.acceptDistance && otherD - best.d >= cfg.acceptMargin) status = 'matched';
   else if (best && best.d <= cfg.maybeDistance) status = 'uncertain';
 
+  // Crops from the full-resolution frame (sharper than the pocket crop): the title line for OCR, the set symbol for printings.
+  const H = homography(
+    [{ x: 0, y: 0 }, { x: POCKET_W, y: 0 }, { x: POCKET_W, y: POCKET_H }, { x: 0, y: POCKET_H }],
+    pc.quad,
+  );
+  const regionOf = (r: readonly [number, number, number, number]): Rect => ({ x: bestWindow.x + bestWindow.w * r[0], y: bestWindow.y + bestWindow.h * r[1], w: bestWindow.w * (r[2] - r[0]), h: bestWindow.h * (r[3] - r[1]) });
   let nameCrop: RGBAImage | undefined;
-  if (status !== 'matched') {
-    // Map the title line from pocket-crop coords back into the full-res frame for a sharp OCR crop.
-    const H = homography(
-      [{ x: 0, y: 0 }, { x: POCKET_W, y: 0 }, { x: POCKET_W, y: POCKET_H }, { x: 0, y: POCKET_H }],
-      pc.quad,
-    );
-    const [fx0, fy0, fx1, fy1] = REGION.name;
-    const nameRect: Rect = { x: bestWindow.x + bestWindow.w * fx0, y: bestWindow.y + bestWindow.h * fy0, w: bestWindow.w * (fx1 - fx0), h: bestWindow.h * (fy1 - fy0) };
-    nameCrop = warpQuad(pc.frame, mapRect(H, nameRect), NAME_W, NAME_H);
-  }
+  if (status !== 'matched') nameCrop = warpQuad(pc.frame, mapRect(H, regionOf(REGION.name)), NAME_W, NAME_H);
+  const symbolCrop = status !== 'unknown' ? warpQuad(pc.frame, mapRect(H, regionOf(SYMBOL_REGION)), SYMBOL_W, SYMBOL_H) : undefined;
   return {
     page: pc.page,
     slot: pc.slot,
@@ -249,6 +263,8 @@ export function recognizePocket(pc: PocketCrop, idx: MatchIndex, cfg: RecognizeC
     glare: pc.glare,
     thumb: thumbOf(bestWindow),
     nameCrop,
+    symbolCrop,
+    contrast: meanStd(grayRect(pc.gray, bestWindow, 48, 67)).std,
     query: fps[bestK],
     borderLuma: borderLuma(pc.gray, bestWindow),
   };

@@ -49,10 +49,38 @@ link. Each person's collection is stored only on their own phone.
    reprints and gold-bordered collectibles. When printings still look the same
    but are priced differently, it prefers the regular printing over a promo and
    marks the pocket **Which printing?** for you to confirm. Examples are Beta
-   vs. Collectors' Edition, or a set card vs. its promo.
-7. **Review.** Green pockets were identified. Orange means check it, red means
+   vs. Collectors' Edition, or a set card vs. its promo. The chooser shows a
+   sharp crop of your card's set symbol next to each printing's, so you can
+   compare them by eye. (Deciding by the symbol automatically was tested and
+   did no better than the default pick: the symbol is only ~20 px at 4K and
+   many look-alikes have identical symbol areas. See `src/core/symbol.ts`.)
+7. **Empty sleeves** (`src/app/session.ts`). An empty sleeve shows whatever
+   is behind it. If the sleeve's other side holds a card, you see a card
+   back, which is recognised and treated as empty. If both sides are empty,
+   you see the card on the next sheet. That card shows up in the same slot of
+   a later spread (right page) or an earlier one (left page), so the app
+   records it once, where it really is, and marks the other copy "seen
+   through sleeve". Repeat captures are judged per page, because see-through
+   cards can make the right page look unchanged after a turn while the left
+   page always changes.
+8. **Review.** Green pockets were identified. Orange means check it, red means
    unknown. Tap any pocket to compare your photo with the match, switch
-   printing or foil, or search by name.
+   printing or foil, or search by name. Switch between the page-by-page
+   gallery and a list, sort by price, 30-day gain or drop, name or set, and
+   search by name.
+
+## Scanning controls
+
+- **Capture pages automatically** (pause about half a second per spread), or
+  **When I tap Snap**. Snap page also works in automatic mode, and Space,
+  Enter, → or Page Down snap too, so a Bluetooth page-turner pedal or remote
+  can be the shutter. A click sound and a green flash confirm each capture.
+- **Pause & adjust**: as the page stacks shift, pause, drag the outline onto
+  the pages as they sit now, and continue. Page tracking restarts from it.
+- Quantities aren't tracked: a binder stores one entry per printing (and
+  finish), and the collection totals count each printing once.
+- **Do I own…?** on the home screen searches every binder; **Browse all**
+  lists the whole collection with the same views, sorts and search.
 
 ## Prices and sell signals
 
@@ -140,6 +168,14 @@ the page):
 | 16 spreads, pages drift 29% of a card width | 46% of cards right, 3 spreads missed | 287/288 right, none wrong |
 | 24 spreads, thick binder, drift 73% of a card width | not run | 429/432 right; the 3 misses flagged orange |
 | 16 spreads, fast flipping (0.5–0.9 s pauses) | not run | 286/288 right |
+
+Binders with empty sleeves (`npm run sim -- --empty 0.3` / `0.6`), where
+empty sleeves show card backs or the next sheet's card:
+
+| Run | Before | Now |
+|---|---|---|
+| 30% of sleeves empty: 201 cards | 281 entries (68 duplicates, 23 in the wrong place, 59 junk from card backs) | 201 entries, 199 exactly right, none wrong shown green |
+| 60% empty: 103 cards | two spreads merged into one; 240 entries, 40% right | 16/16 spreads, 108 entries, 94% exactly right, every card found |
 
 - These are simulated photos. Real glare, sleeve scratches, curled pages and
   autofocus will be harder, so the thresholds in `DEFAULT_RECOGNIZE` and

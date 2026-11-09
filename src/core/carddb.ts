@@ -24,6 +24,8 @@ export interface CardsFile {
   source: string;
   sets: Record<string, string>;
   cards: CardRow[];
+  /** Fingerprint (5 words) of the Magic card back, for spotting sleeves that show one. */
+  back?: number[];
 }
 
 export type Finish = 'nonfoil' | 'foil' | 'etched';
@@ -94,6 +96,7 @@ export class CardDB {
   readonly file: CardsFile;
   readonly fps: Uint32Array;
   readonly count: number;
+  readonly back?: Uint32Array;
   /** Unique card names (front face names for multi-face cards). */
   readonly names: string[] = [];
   /** cards index -> names index */
@@ -110,6 +113,7 @@ export class CardDB {
     this.file = file;
     this.fps = fps.data;
     this.count = fps.count;
+    this.back = file.back?.length === FP_WORDS ? Uint32Array.from(file.back) : undefined;
     this.nameOf = new Int32Array(this.count);
     const byName = new Map<string, number>();
     file.cards.forEach((row, i) => {

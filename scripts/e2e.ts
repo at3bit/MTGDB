@@ -8,7 +8,7 @@
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, rmSync } from 'node:fs';
 import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FP_WORDS, fingerprint } from '../src/core/fingerprint.ts';
@@ -161,11 +161,30 @@ try {
   await page.screenshot({ path: join(out, '6-sheet.png') });
   await page.getByRole('button', { name: 'Done' }).click();
   await page.getByRole('button', { name: 'Save binder' }).click();
-  await page.getByText('By value').waitFor({ timeout: 10000 });
-  await page.screenshot({ path: join(out, '7-binder.png'), fullPage: true });
-  const saved = await page.locator('.list li').count();
+  await page.getByRole('button', { name: 'Export CSV' }).waitFor({ timeout: 10000 });
+  await page.screenshot({ path: join(out, '7-binder-gallery.png'), fullPage: true });
   const identified = tiles.filter((t) => !['Empty', '?', 'Check', '—'].includes(t.name)).length;
+  // List view, sorted by price (the binder's default sort).
+  await page.getByRole('button', { name: 'List', exact: true }).click();
+  const listRows = page.locator('[data-testid=cards-list] li');
+  const saved = await listRows.count();
   check(saved === identified, `binder saved with ${saved} cards (expected ${identified}; empty pockets are skipped)`);
+  const prices: number[] = ((await listRows.locator('.num').allTextContents()) as string[]).map((t: string) => Number(t.replace(/[$,]/g, '')));
+  check(prices.every((p: number, i: number) => i === 0 || prices[i - 1] >= p), `list sorted by highest price (${prices.slice(0, 3).join(', ')}, …)`);
+  await page.screenshot({ path: join(out, '7-binder-list.png'), fullPage: true });
+  // Search inside the binder.
+  const someName = file.cards[spreadIds[1][4]][1];
+  await page.getByLabel('Search cards').fill(someName);
+  const summary = await page.getByTestId('cards-summary').textContent();
+  check(/^1 match/.test(summary ?? '') && (await listRows.count()) === 1, `search “${someName}” in the binder: ${summary}`);
+  await page.getByRole('button', { name: '‹ Home' }).click();
+  // "Do I own…?" from the home screen.
+  await page.getByLabel('Search your collection').fill(someName.replace('Synthetic ', ''));
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await page.getByText('All cards').waitFor();
+  const found = await page.getByTestId('cards-summary').textContent();
+  check(/^1 match/.test(found ?? ''), `home search finds it in the collection: ${found}`);
+  await page.screenshot({ path: join(out, '8-search.png'), fullPage: true });
   await page.getByRole('button', { name: '‹ Home' }).click();
   await page.screenshot({ path: join(out, '8-home-after.png'), fullPage: true });
 } catch (e) {
@@ -176,7 +195,76 @@ try {
   const problems = logs.filter((l) => /error/i.test(l));
   if (problems.length) console.log('browser console:\n  ' + problems.join('\n  '));
   await browser.close();
+}
+
+// ---- Live camera: Snap, Pause & adjust, Continue, keyboard snap.
+// Chromium plays a video file as the camera: spread 1 for 11 s, then spread 2.
+const camPath = join(out, 'camera.y4m');
+await new Promise<void>((resolve, reject) => {
+  const ff = spawn('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', `${W}x${H}`, '-r', '10', '-i', '-', '-pix_fmt', 'yuv420p', '-f', 'yuv4mpegpipe', camPath]);
+  ff.on('error', reject);
+  ff.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}`))));
+  for (let i = 0; i < 110; i++) ff.stdin.write(rgb(still[0][i % 3]));
+  for (let i = 0; i < 110; i++) ff.stdin.write(rgb(still[1][i % 3]));
+  ff.stdin.end();
+});
+const camBrowser = await chromium.launch({ args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-video-capture=${camPath}`] });
+const cam = await camBrowser.newPage({ viewport: { width: 390, height: 844 } });
+const camLogs: string[] = [];
+cam.on('pageerror', (e: Error) => camLogs.push(`pageerror: ${e.message}`));
+try {
+  await cam.goto('http://localhost:4173/?db=test-data');
+  await cam.evaluate(async (pages: unknown) => {
+    await new Promise<void>((resolve, reject) => {
+      const req = indexedDB.open('keyval-store');
+      req.onupgradeneeded = () => req.result.createObjectStore('keyval');
+      req.onsuccess = () => {
+        const tx = req.result.transaction('keyval', 'readwrite');
+        tx.objectStore('keyval').put({ calibration: { pages, rows: 3, cols: 3 }, rotation: 0, frameW: 1280, frameH: 720 }, 'calibration-v1');
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      };
+    });
+  }, SCENE_PAGES);
+  await cam.reload();
+  await cam.getByRole('button', { name: 'Scan a binder' }).click({ timeout: 20000 });
+  await cam.locator('input[type=text]').fill('Camera binder');
+  await cam.getByRole('button', { name: 'Use live camera' }).click();
+  const t0 = Date.now();
+  await cam.getByRole('button', { name: 'When I tap Snap' }).click({ timeout: 20000 });
+  await cam.getByRole('button', { name: 'Start run' }).click();
+  await cam.waitForTimeout(Math.max(0, 3000 - (Date.now() - t0)));
+  await cam.getByRole('button', { name: 'Snap page' }).click();
+  await cam.getByText('· 1 spread').waitFor({ timeout: 20000 });
+  check(true, 'Snap page captured spread 1 from the live camera');
+  await cam.getByRole('button', { name: 'Pause & adjust' }).click();
+  await cam.getByRole('button', { name: 'Continue' }).waitFor();
+  const handles = await cam.locator('circle.handle').count();
+  check(handles === 8, `paused: outline is editable (${handles} corner handles)`);
+  await cam.screenshot({ path: join(out, '9-camera-paused.png') });
+  await cam.getByRole('button', { name: 'Continue' }).click();
+  await cam.getByRole('button', { name: 'Snap page' }).waitFor();
+  await cam.waitForTimeout(Math.max(0, 14500 - (Date.now() - t0)));
+  await cam.keyboard.press('Space'); // a Bluetooth page-turner sends keys like this
+  await cam.getByText('· 2 spreads').waitFor({ timeout: 20000 });
+  check(true, 'Space key captured spread 2');
+  await cam.getByRole('button', { name: 'Finish' }).click();
+  await cam.getByText('Review “Camera binder”').waitFor({ timeout: 60000 });
+  const camSpreads = await cam.locator('strong', { hasText: /^Spread \d+$/ }).count();
+  const camTiles: string[] = await cam.locator('.tile .name').allTextContents();
+  const want = spreadIds.slice(0, 2).flatMap((ids) => ids.map((id) => (id >= 0 ? `Synthetic Card ${String(id).padStart(3, '0')}` : 'Empty')));
+  const camRight = camTiles.filter((n, i) => n === want[i]).length;
+  check(camSpreads === 2 && camRight >= 34, `camera run: ${camSpreads} spreads, ${camRight}/36 pockets right`);
+  await cam.screenshot({ path: join(out, '10-camera-review.png') });
+} catch (e) {
+  failed = true;
+  console.error(e);
+  await cam.screenshot({ path: join(out, 'error-camera.png'), fullPage: true }).catch(() => {});
+} finally {
+  if (camLogs.length) console.log('camera browser errors:\n  ' + camLogs.join('\n  '));
+  await camBrowser.close();
   server.close();
+  rmSync(camPath, { force: true }); // ~300 MB of raw video
 }
 console.log(failed ? 'E2E FAILED' : 'E2E PASSED');
 process.exit(failed ? 1 : 0);

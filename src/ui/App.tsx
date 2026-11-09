@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CardDB } from '../core/carddb.ts';
 import { loadBaselines, loadCardDB, MissingDataError, Recognizer } from '../app/data.ts';
 import type { Baselines } from '../core/baselines.ts';
-import { applyOcr, mergeInto, needsOcr, sameSpread, toPocketView, type LivePrices, type PocketView, type Spread } from '../app/session.ts';
+import { addReading, applyOcr, binderEntries, markGhosts, needsOcr, toPocketView, type LivePrices, type PocketView, type Spread } from '../app/session.ts';
 import { loadCollection, loadHistory, loadLivePrices, recordPrices, saveCollection, saveLivePrices, type Collection, type OwnedCard, type PriceHistory } from '../app/store.ts';
 import { fetchLivePrices } from '../app/prices.ts';
 import type { WirePocket } from '../app/protocol.ts';
@@ -10,14 +10,15 @@ import { HomeScreen } from './HomeScreen.tsx';
 import { SetupScreen } from './SetupScreen.tsx';
 import { ScanScreen } from './ScanScreen.tsx';
 import { ReviewScreen } from './ReviewScreen.tsx';
-import { BinderScreen } from './BinderScreen.tsx';
+import { BinderScreen, CollectionScreen } from './BinderScreen.tsx';
 
 type Screen =
   | { name: 'home' }
   | { name: 'setup' }
   | { name: 'scan'; binder: string; source: 'camera' | File }
   | { name: 'review'; binder: string }
-  | { name: 'binder'; binder: string };
+  | { name: 'binder'; binder: string }
+  | { name: 'all'; query?: string };
 
 let pocketKeys = 0;
 type KeyedPocket = PocketView & { key: number };
@@ -39,7 +40,6 @@ export function App() {
   const recognizer = useRef<Recognizer | null>(null);
   const spreadsRef = useRef<Spread[]>([]);
   const ocrChain = useRef<Promise<void>>(Promise.resolve());
-  const nextSpreadId = useRef(1);
 
   const commitSpreads = (next: Spread[]) => {
     spreadsRef.current = next;
@@ -103,37 +103,34 @@ export function App() {
   );
 
   const onSpread = useCallback(
-    (r: { pockets: WirePocket[]; time: number; retried?: number[] }, pps: number) => {
+    (r: { pockets: WirePocket[]; time: number; retried?: number[]; change?: number; manual?: boolean }, pps: number) => {
       if (!db) return;
       setPagesPerSpread(pps);
       const pockets: KeyedPocket[] = r.pockets.map((p) => ({ ...toPocketView(p, db), key: ++pocketKeys }));
       const prev = spreadsRef.current;
-      const last = prev[prev.length - 1];
-      const repeat = !!last && sameSpread(last.pockets, pockets, db);
+      const next = addReading(prev, { pockets, time: r.time, change: r.change ?? Infinity, manual: !!r.manual }, pps, db);
+      const repeat = next.length === prev.length && prev.length > 0;
       setRunStats((s) => ({ captures: s.captures + 1, repeats: s.repeats + (repeat ? 1 : 0), reread: s.reread + (r.retried?.length ?? 0) }));
-      if (repeat) {
-        commitSpreads([...prev.slice(0, -1), { ...last, pockets: mergeInto(last.pockets, pockets) }]);
-      } else {
-        commitSpreads([...prev, { id: nextSpreadId.current++, time: r.time, pockets }]);
-      }
-      for (const p of pockets) if (needsOcr(p)) runOcr(p.key, p.nameCrop!);
+      commitSpreads(next);
+      for (const p of pockets) if (needsOcr(p) && !p.cardBack) runOcr(p.key, p.nameCrop!);
     },
     [db, runOcr],
   );
 
   const updatePocket = (spreadId: number, pocket: PocketView) => {
-    commitSpreads(spreadsRef.current.map((s) => (s.id === spreadId ? { ...s, pockets: s.pockets.map((p) => (p.page === pocket.page && p.slot === pocket.slot ? pocket : p)) } : s)));
+    const next = spreadsRef.current.map((s) => (s.id === spreadId ? { ...s, pockets: s.pockets.map((p) => (p.page === pocket.page && p.slot === pocket.slot ? pocket : p)) } : s));
+    commitSpreads(db ? markGhosts(next, pagesPerSpread, db) : next);
   };
 
   const saveBinder = async (binder: string) => {
     if (!db) return;
-    const cards: OwnedCard[] = [];
-    spreadsRef.current.forEach((s, si) => {
-      for (const p of s.pockets) {
-        if (p.chosen === null) continue;
-        cards.push({ id: db.info(p.chosen).id, finish: p.finish, page: si * pagesPerSpread + p.page + 1, slot: p.slot + 1 });
-      }
-    });
+    // One entry per printing (quantities aren't tracked); see-through cards and card backs are left out.
+    const cards: OwnedCard[] = binderEntries(spreadsRef.current, pagesPerSpread, db).map((e) => ({
+      id: db.info(e.card).id,
+      finish: e.finish,
+      page: e.spreadIndex * pagesPerSpread + e.page + 1,
+      slot: e.slot + 1,
+    }));
     const next: Collection = {
       binders: [{ name: binder, updatedAt: new Date().toISOString(), cards }, ...collection.binders.filter((b) => b.name !== binder)],
     };
@@ -174,6 +171,7 @@ export function App() {
           refreshing={refreshing}
           onScan={() => setScreen({ name: 'setup' })}
           onOpenBinder={(b) => setScreen({ name: 'binder', binder: b })}
+          onBrowse={(query) => setScreen({ name: 'all', query })}
           onRefresh={refresh}
         />
       )}
@@ -208,6 +206,8 @@ export function App() {
           live={live}
           ocrPending={ocrPending}
           runStats={runStats}
+          history={history}
+          baselines={baselines}
           onUpdate={updatePocket}
           onReadName={(_, p) => p.nameCrop && runOcr((p as KeyedPocket).key, p.nameCrop)}
           onSave={() => saveBinder(screen.binder)}
@@ -218,6 +218,9 @@ export function App() {
             }
           }}
         />
+      )}
+      {screen.name === 'all' && db && (
+        <CollectionScreen db={db} collection={collection} live={live} history={history} baselines={baselines} query={screen.query} onBack={() => setScreen({ name: 'home' })} />
       )}
       {screen.name === 'binder' && db && (
         <BinderScreen

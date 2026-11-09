@@ -174,12 +174,23 @@ async function main() {
   const outRows = keep.map((i) => rows[i]);
   const outFps = new Uint32Array(keep.length * FP_WORDS);
   keep.forEach((i, j) => outFps.set(fps.subarray(i * FP_WORDS, (i + 1) * FP_WORDS), j * FP_WORDS));
+  // The standard Magic card back, so the app can tell a sleeve showing a card back from a card.
+  let back: number[] | undefined;
+  try {
+    const r = await fetch('https://backs.scryfall.io/normal/0/a/0aeebaf5-8c7d-4636-9e82-8c27447861f7.jpg', { headers: { 'User-Agent': UA } });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const { data, info } = await sharp(Buffer.from(await r.arrayBuffer())).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    back = Array.from(fingerprint({ width: info.width, height: info.height, data: new Uint8ClampedArray(data.buffer, data.byteOffset, data.byteLength) }));
+  } catch (e) {
+    console.warn(`card back not fingerprinted: ${(e as Error).message}`);
+  }
   const file: CardsFile = {
     v: 1,
     built: new Date().toISOString(),
     source: `Scryfall default_cards ${entry.updated_at}`,
     sets,
     cards: outRows,
+    back,
   };
   writeFileSync(join(outDir, 'cards.json'), JSON.stringify(file));
   writeFileSync(join(outDir, 'fingerprints.bin'), encodeFingerprints(outFps, keep.length));

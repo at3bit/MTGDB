@@ -89,6 +89,11 @@ export class SpreadWatcher {
     return null;
   }
 
+  /** How different a view is from the last captured spread (Infinity if nothing was captured yet). */
+  changeFrom(raw: GrayImage): number {
+    return this.lastCaptured ? normalizedDiff(this.lastCaptured, normalizeBrightness(raw)) : Infinity;
+  }
+
   /** Record the thumbnail of the spread that was just captured. */
   markCaptured(raw: GrayImage) {
     this.lastCaptured = normalizeBrightness(raw);

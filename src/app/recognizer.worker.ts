@@ -16,7 +16,7 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
   const msg = ev.data;
   try {
     if (msg.type === 'init') {
-      index = { fps: msg.fps, count: msg.count, nameOf: msg.nameOf };
+      index = { fps: msg.fps, count: msg.count, nameOf: msg.nameOf, back: msg.back };
       post({ type: 'ready' });
       return;
     }
@@ -32,6 +32,7 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
       const pockets: WirePocket[] = results.map((r) => {
         transfer.push(r.thumb.data.buffer);
         if (r.nameCrop) transfer.push(r.nameCrop.data.buffer);
+        if (r.symbolCrop) transfer.push(r.symbolCrop.data.buffer);
         return {
           page: r.page,
           slot: r.slot,
@@ -44,6 +45,9 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
           nameCrop: r.nameCrop ? { width: r.nameCrop.width, height: r.nameCrop.height, buffer: r.nameCrop.data.buffer as ArrayBuffer } : undefined,
           query: r.query ? Array.from(r.query) : undefined,
           borderLuma: r.borderLuma,
+          cardBack: r.cardBack,
+          contrast: r.contrast,
+          symbolCrop: r.symbolCrop ? { width: r.symbolCrop.width, height: r.symbolCrop.height, buffer: r.symbolCrop.data.buffer as ArrayBuffer } : undefined,
         };
       });
       post({ type: 'spread', job: msg.job, pockets, ms: performance.now() - t0, calibration: tracked.calibration, retried: tracked.retried }, transfer);

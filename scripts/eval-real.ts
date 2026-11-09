@@ -21,6 +21,8 @@ import { recognizeSpread, type PocketResult } from '../src/core/recognize.ts';
 import { applyOcr, settlePrinting, type PocketView } from '../src/app/session.ts';
 import type { RGBAImage } from '../src/core/image.ts';
 import { fpDistance } from '../src/core/fingerprint.ts';
+import { pickBySymbol } from '../src/core/symbol.ts';
+import { existsSync, writeFileSync as writeFile } from 'node:fs';
 import { renderSpread, rng, type RenderOptions } from '../tests/synth.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -29,6 +31,21 @@ mkdirSync(out, { recursive: true });
 const arg = (name: string, def: number) => (process.argv.includes(name) ? Number(process.argv[process.argv.indexOf(name) + 1]) : def);
 const SPREADS = arg('--spreads', 6);
 const SEED = arg('--seed', 1);
+// --symbol: experiment that settles look-alike printings by comparing set-symbol crops automatically.
+// Measured over 102 ties it did no better than the default pick (51 vs 56 right), so the app doesn't do this.
+const USE_SYMBOL = process.argv.includes('--symbol');
+/** Scryfall scan of a printing, cached on disk. */
+async function refImage(card: number): Promise<RGBAImage> {
+  const id = file.cards[card][0];
+  const path = join(root, 'data-cache', 'scans', `${id}.jpg`);
+  if (!existsSync(path)) {
+    const res = await fetch(`https://cards.scryfall.io/normal/front/${id[0]}/${id[1]}/${id}.jpg`, { headers: { 'User-Agent': UA } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    writeFile(path, Buffer.from(await res.arrayBuffer()));
+  }
+  const { data, info } = await sharp(path).resize(488, 680, { fit: 'fill' }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  return { width: info.width, height: info.height, data: new Uint8ClampedArray(data.buffer, data.byteOffset, data.byteLength) };
+}
 const UA = 'MTGDB-binder-scanner/0.1 (accuracy evaluation)';
 
 // ---- database
@@ -93,12 +110,12 @@ const conditions: { name: string; opts: Omit<RenderOptions, 'seed'> }[] = [
   { name: '1080p live camera, even lighting', opts: { width: 1920, height: 1080, noise: 3, blur: true, haze: 0.1, jitter: 0.015, calibError: 0.002 } },
 ];
 
-interface Tally { toReview: number; flagged: number; hiddenError: number; valueError: number; printingMisses: { text: string; price: number }[]; pockets: number; imgMatched: number; imgMatchedWrongName: number; uncertain: number; unknown: number; nameRight: number; printingRight: number; confidentWrong: number; trueValue: number; foundValue: number; failures: string[] }
+interface Tally { symbolDefaultRight: number; symbolTried: number; symbolSettled: number; symbolSettledRight: number; symbolBestRight: number; toReview: number; flagged: number; hiddenError: number; valueError: number; printingMisses: { text: string; price: number }[]; pockets: number; imgMatched: number; imgMatchedWrongName: number; uncertain: number; unknown: number; nameRight: number; printingRight: number; confidentWrong: number; trueValue: number; foundValue: number; failures: string[] }
 const results: Record<string, Tally> = {};
 const label = (i: number) => `${file.cards[i][1]} (${file.cards[i][2].toUpperCase()} #${file.cards[i][3]})`;
 
 for (const cond of conditions) {
-  const t: Tally = { toReview: 0, flagged: 0, hiddenError: 0, valueError: 0, printingMisses: [], pockets: 0, imgMatched: 0, imgMatchedWrongName: 0, uncertain: 0, unknown: 0, nameRight: 0, printingRight: 0, confidentWrong: 0, trueValue: 0, foundValue: 0, failures: [] };
+  const t: Tally = { symbolDefaultRight: 0, symbolTried: 0, symbolSettled: 0, symbolSettledRight: 0, symbolBestRight: 0, toReview: 0, flagged: 0, hiddenError: 0, valueError: 0, printingMisses: [], pockets: 0, imgMatched: 0, imgMatchedWrongName: 0, uncertain: 0, unknown: 0, nameRight: 0, printingRight: 0, confidentWrong: 0, trueValue: 0, foundValue: 0, failures: [] };
   const t0 = Date.now();
   for (let s = 0; s < SPREADS; s++) {
     const ids = picks.slice(s * 18, s * 18 + 18);
@@ -119,6 +136,21 @@ for (const cond of conditions) {
       let view: PocketView = { page: p.page, slot: p.slot, status: p.status, matches: p.matches, otherNameDistance: p.otherNameDistance, thumbUrl: '', query: p.query, nameCrop: undefined, chosen: p.status === 'matched' || p.status === 'uncertain' ? p.matches[0]?.card ?? null : null, finish: 'nonfoil', via: 'image', glare: p.glare, borderLuma: p.borderLuma };
       if (p.status !== 'matched' && p.status !== 'empty' && p.nameCrop) view = applyOcr(view, await readName(p.nameCrop), db);
       else view = settlePrinting(view, db);
+      // Settle look-alike printings by the set symbol, as the app does.
+      if (USE_SYMBOL && view.printingCheck && view.ties && view.ties.length > 1 && p.symbolCrop) {
+        const cands = await Promise.all(view.ties.slice(0, 6).map(async (card) => ({ card, image: await refImage(card) })));
+        const pick = pickBySymbol(p.symbolCrop, cands);
+        if (pick) {
+          t.symbolTried++;
+          if (view.chosen === truth) t.symbolDefaultRight++;
+          if (pick.card === truth) t.symbolBestRight++;
+          if (pick.decisive) {
+            t.symbolSettled++;
+            if (pick.card === truth) t.symbolSettledRight++;
+            view = { ...view, chosen: pick.card, printingCheck: false, status: view.status === 'uncertain' && view.via === 'image' ? 'matched' : view.status };
+          }
+        }
+      }
       const got = view.chosen;
       if (view.status !== 'matched') t.toReview++;
       if (view.printingCheck) t.flagged++;
@@ -152,6 +184,7 @@ for (const cond of conditions) {
   t.failures.slice(0, 12).forEach((f) => console.log(`   ✗ ${f}`));
   console.log(`  value error (sum of |price picked - true price|): $${t.valueError.toFixed(2)} before review; $${t.hiddenError.toFixed(2)} hidden in pockets shown as identified`);
   console.log(`  pockets to check: ${t.toReview} of ${t.pockets} (${t.flagged} for "which printing?")`);
+  if (USE_SYMBOL) console.log(`  set symbol: compared ${t.symbolTried} ties; first guess right without the symbol ${t.symbolDefaultRight}, with it ${t.symbolBestRight}; settled ${t.symbolSettled} automatically, ${t.symbolSettledRight} of them right`);
   t.printingMisses.sort((a, b) => b.price - a.price);
   t.printingMisses.slice(0, 15).forEach((f) => console.log(`   ~ ${f.text}`));
 }

@@ -5,10 +5,8 @@
 //
 // Needs internet access to mtgjson.com. Run after `npm run data`.
 //
-// baselines.bin (little endian)
-//   "MTGB" | u32 version (1) | u32 count | u32 asOf (yyyymmdd) | count * 9 * f32
-//   per card: [nonfoil latest, avg30, avg90, foil latest, avg30, avg90, etched latest, avg30, avg90]
-//   NaN = no data. Entry i belongs to cards.json cards[i].
+// File format: see src/core/baselines.ts (version 2: latest, 30- and 90-day
+// averages and the price 30 days ago, per finish).
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,7 +14,7 @@ import { Readable } from 'node:stream';
 import { createGunzip } from 'node:zlib';
 import { createInterface } from 'node:readline';
 import { streamObjectEntries } from './stream-json.ts';
-import { encodeBaselines, BASELINE_FIELDS } from '../src/core/baselines.ts';
+import { encodeBaselines, BASELINE_FIELDS, PER_FINISH } from '../src/core/baselines.ts';
 import type { CardsFile } from '../src/core/carddb.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -72,16 +70,23 @@ for await (const [uuid, value] of streamObjectEntries(await gunzipStream(`${BASE
       const window = pts.filter(([d]) => day(d) < end && day(d) >= end - days).map(([, p]) => p);
       return window.length >= Math.min(5, days / 6) ? window.reduce((a, b) => a + b, 0) / window.length : NaN;
     };
-    const o = idx * BASELINE_FIELDS + f * 3;
+    // The price about 30 days before the latest: the closest day within 25-35 days back.
+    let ago30 = NaN, bestGap = Infinity;
+    for (const [d, p] of pts) {
+      const gap = Math.abs(end - 30 - day(d));
+      if (gap <= 5 && gap < bestGap) { bestGap = gap; ago30 = p; }
+    }
+    const o = idx * BASELINE_FIELDS + f * PER_FINISH;
     // Several MTGJSON entries can map to one Scryfall printing; keep the one with the most history.
     if (Number.isFinite(data[o + 2]) && !Number.isFinite(avg(90))) return;
     data[o] = latest;
     data[o + 1] = avg(30);
     data[o + 2] = avg(90);
+    data[o + 3] = ago30;
     used++;
   });
   if (seen % 20000 === 0) console.log(`  ${seen.toLocaleString()} entries read`);
 }
-const withData = Array.from({ length: cards.length }, (_, i) => i).filter((i) => Number.isFinite(data[i * BASELINE_FIELDS + 1]) || Number.isFinite(data[i * BASELINE_FIELDS + 4])).length;
+const withData = Array.from({ length: cards.length }, (_, i) => i).filter((i) => Number.isFinite(data[i * BASELINE_FIELDS + 1]) || Number.isFinite(data[i * BASELINE_FIELDS + PER_FINISH + 1])).length;
 writeFileSync(join(root, 'public/data/baselines.bin'), encodeBaselines(data, cards.length, asOf));
 console.log(`Wrote baselines.bin: ${withData.toLocaleString()} printings with a 30-day baseline (prices as of ${asOf}, ${used.toLocaleString()} series)`);

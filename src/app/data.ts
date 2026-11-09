@@ -86,7 +86,7 @@ export class Recognizer {
         this.pending.delete(m.job);
       }
     });
-    const msg: WorkerRequest = { type: 'init', fps: db.fps.slice(), count: db.count, nameOf: db.nameOf.slice() };
+    const msg: WorkerRequest = { type: 'init', fps: db.fps.slice(), count: db.count, nameOf: db.nameOf.slice(), back: db.back?.slice() };
     this.worker.postMessage(msg);
   }
 

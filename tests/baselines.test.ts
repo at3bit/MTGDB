@@ -4,15 +4,15 @@ import { trendFor } from '../src/app/store.ts';
 
 describe('price baselines', () => {
   const data = new Float32Array(2 * BASELINE_FIELDS).fill(NaN);
-  data.set([12, 10, 9], 0); // card 0 nonfoil: latest 12, avg30 10, avg90 9
-  data.set([3, 4, 4.5], BASELINE_FIELDS + 3); // card 1 foil
+  data.set([12, 10, 9, 8], 0); // card 0 nonfoil: latest 12, avg30 10, avg90 9, 30 days ago 8
+  data.set([3, 4, 4.5, NaN], BASELINE_FIELDS + 4); // card 1 foil
   const enc = encodeBaselines(data, 2, '2026-11-07');
   const b = new Baselines(enc.buffer.slice(enc.byteOffset, enc.byteOffset + enc.byteLength) as ArrayBuffer);
 
   it('round-trips and reports missing data as null', () => {
     expect(b.count).toBe(2);
     expect(b.asOf).toBe('2026-11-07');
-    expect(b.get(0, 'nonfoil')).toEqual({ latest: 12, avg30: 10, avg90: 9 });
+    expect(b.get(0, 'nonfoil')).toEqual({ latest: 12, avg30: 10, avg90: 9, ago30: 8 });
     expect(b.get(0, 'foil')).toBeNull();
     expect(b.get(1, 'foil')?.avg30).toBe(4);
     expect(b.get(5, 'nonfoil')).toBeNull();

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { formatUSD, type CardDB } from '../core/carddb.ts';
 import { cardPrice, type LivePrices } from '../app/session.ts';
 import { trendFor, type Collection, type PriceHistory } from '../app/store.ts';
@@ -14,6 +15,8 @@ interface Props {
   refreshing: string | null;
   onScan: () => void;
   onOpenBinder: (name: string) => void;
+  /** Open the all-cards view, optionally searching for a name. */
+  onBrowse: (query?: string) => void;
   onRefresh: () => void;
 }
 
@@ -48,21 +51,34 @@ export function ownedRows(db: CardDB, col: Collection, live: LivePrices, history
   return rows;
 }
 
+/** Quantities aren't tracked: one row per printing and finish across the collection (first place it's stored). */
+export function uniqueRows(rows: OwnedRow[]): OwnedRow[] {
+  const seen = new Set<string>();
+  return rows.filter((r) => {
+    const k = `${r.id}:${r.finish}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
 export function TrendBadge({ t }: { t: OwnedRow['trend'] }) {
   if (!t || Math.abs(t.vsAvg) < 0.05) return null;
   const up = t.vsAvg > 0;
   return <span className={`badge ${up ? 'up' : 'down'}`}>{up ? '▲' : '▼'} {Math.round(Math.abs(t.vsAvg) * 100)}%</span>;
 }
 
-export function HomeScreen({ db, dbStatus, collection, live, history, baselines, refreshing, onScan, onOpenBinder, onRefresh }: Props) {
-  const rows = db ? ownedRows(db, collection, live, history, baselines) : [];
+export function HomeScreen({ db, dbStatus, collection, live, history, baselines, refreshing, onScan, onOpenBinder, onBrowse, onRefresh }: Props) {
+  const [query, setQuery] = useState('');
+  const allRows = db ? ownedRows(db, collection, live, history, baselines) : [];
+  const rows = uniqueRows(allRows);
   const total = rows.reduce((t, r) => t + (r.price ?? 0), 0);
   const sell = rows
     .filter((r) => r.trend && r.trend.vsAvg >= SELL_SIGNAL && r.trend.avg * r.trend.vsAvg >= 1)
     .sort((a, b) => b.trend!.avg * b.trend!.vsAvg - a.trend!.avg * a.trend!.vsAvg)
     .slice(0, 10);
   const top = [...rows].sort((a, b) => (b.price ?? 0) - (a.price ?? 0)).slice(0, 10);
-  const binderValue = (name: string) => rows.filter((r) => r.binder === name).reduce((t, r) => t + (r.price ?? 0), 0);
+  const binderValue = (name: string) => allRows.filter((r) => r.binder === name).reduce((t, r) => t + (r.price ?? 0), 0);
 
   return (
     <div>
@@ -91,6 +107,23 @@ export function HomeScreen({ db, dbStatus, collection, live, history, baselines,
           <button className="btn" onClick={onRefresh} disabled={!db || !rows.length || !!refreshing}>{refreshing ?? 'Refresh prices'}</button>
         </div>
       </div>
+
+      {db && rows.length > 0 && (
+        <form
+          className="card stack"
+          onSubmit={(e) => {
+            e.preventDefault();
+            onBrowse(query.trim());
+          }}
+        >
+          <h2>Do I own…?</h2>
+          <div className="row">
+            <input type="search" className="grow" placeholder="Card name" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search your collection" />
+            <button className="btn" type="submit">Search</button>
+          </div>
+          <button className="btn block" type="button" onClick={() => onBrowse()}>Browse all {rows.length} cards</button>
+        </form>
+      )}
 
       {sell.length > 0 && (
         <div className="card">
@@ -162,7 +195,7 @@ export function HomeScreen({ db, dbStatus, collection, live, history, baselines,
           <ol className="tips">
             <li>Mount your iPhone on a tripod, camera facing straight down at the table.</li>
             <li>Open the binder underneath so both pages are in view.</li>
-            <li>Line up the outline once, then turn the pages, pausing about a second on each spread.</li>
+            <li>Line up the outline once, then turn the pages, pausing about half a second on each spread (or tap Snap page).</li>
             <li>Check anything marked orange or red, then save. Prices update daily.</li>
           </ol>
         </div>

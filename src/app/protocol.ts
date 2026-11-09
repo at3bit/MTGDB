@@ -9,7 +9,7 @@ export interface WireImage {
 }
 
 export type WorkerRequest =
-  | { type: 'init'; fps: Uint32Array; count: number; nameOf: Int32Array }
+  | { type: 'init'; fps: Uint32Array; count: number; nameOf: Int32Array; back?: Uint32Array }
   /** `runId` groups the spreads of one run so the worker can follow the pages from one spread to the next. */
   | { type: 'spread'; job: number; runId: number; frames: WireImage[]; calibration: Calibration };
 
@@ -25,6 +25,9 @@ export interface WirePocket {
   nameCrop?: WireImage;
   query?: number[];
   borderLuma?: number;
+  cardBack?: boolean;
+  contrast?: number;
+  symbolCrop?: WireImage;
 }
 
 export type WorkerResponse =

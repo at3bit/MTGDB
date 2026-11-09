@@ -87,6 +87,21 @@ export interface Trend {
   avg: number;
   days: number;
   source: 'market' | 'local';
+  /** Change in price over the last 30 days, in dollars and as a fraction (null if unknown). */
+  gain30: number | null;
+  pct30: number | null;
+}
+
+/** Price ~30 days ago from this phone's own history (closest day 20-40 days back). */
+function localAgo30(list: [string, number][] | undefined): number | null {
+  if (!list) return null;
+  const target = Date.now() - 30 * 86400_000;
+  let best: number | null = null, gap = Infinity;
+  for (const [d, p] of list) {
+    const g = Math.abs(Date.parse(d) - target) / 86400_000;
+    if (g <= 10 && g < gap) { gap = g; best = p; }
+  }
+  return best;
 }
 
 /**
@@ -95,13 +110,14 @@ export interface Trend {
  * this phone has recorded since the card was scanned.
  */
 export function trendFor(hist: PriceHistory, id: string, finish: Finish, current: number | null, baseline?: Baseline | null): Trend | null {
+  const list = hist[historyKey(id, finish)];
   if (baseline && baseline.avg30 > 0) {
     // Scryfall's USD price and MTGJSON's TCGplayer history are the same series (they agree to within 1% for
     // 95% of cards), so today's price, refreshed on the phone, can be compared with the 30-day average.
     const now = current ?? baseline.latest;
-    return { vsAvg: now / baseline.avg30 - 1, avg: baseline.avg30, days: 30, source: 'market' };
+    const ago = Number.isFinite(baseline.ago30) && baseline.ago30 > 0 ? baseline.ago30 : localAgo30(list);
+    return { vsAvg: now / baseline.avg30 - 1, avg: baseline.avg30, days: 30, source: 'market', gain30: ago ? now - ago : null, pct30: ago ? now / ago - 1 : null };
   }
-  const list = hist[historyKey(id, finish)];
   if (!list || current == null) return null;
   const today = new Date().toISOString().slice(0, 10);
   const cutoff = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10);
@@ -109,5 +125,6 @@ export function trendFor(hist: PriceHistory, id: string, finish: Finish, current
   if (prior.length < 3) return null;
   const avg = prior.reduce((s, [, p]) => s + p, 0) / prior.length;
   if (avg <= 0) return null;
-  return { vsAvg: current / avg - 1, avg, days: prior.length, source: 'local' };
+  const ago = localAgo30(list);
+  return { vsAvg: current / avg - 1, avg, days: prior.length, source: 'local', gain30: ago ? current - ago : null, pct30: ago ? current / ago - 1 : null };
 }
