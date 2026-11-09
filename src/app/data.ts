@@ -124,38 +124,66 @@ export interface SpreadReading {
   discarded?: boolean;
 }
 
-type Pending = { resolve: (p: SpreadReading) => void; reject: (e: Error) => void };
+type Pending = { resolve: (p: SpreadReading) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> };
+
+/** A spread normally takes a few seconds; one that takes this long means the worker hung. */
+const JOB_TIMEOUT_MS = 90_000;
 
 export class Recognizer {
-  private worker: Worker;
-  private ready: Promise<void>;
+  private worker!: Worker;
+  private ready!: Promise<void>;
   private pending = new Map<number, Pending>();
   private nextJob = 1;
   inFlight = 0;
+  /** How many times the worker had to be restarted (it crashed, or hung). */
+  restarts = 0;
 
-  constructor(db: CardDB) {
-    this.worker = new Worker(new URL('./recognizer.worker.ts', import.meta.url), { type: 'module' });
+  constructor(private db: CardDB) {
+    this.spawn();
+  }
+
+  private spawn() {
+    const worker = new Worker(new URL('./recognizer.worker.ts', import.meta.url), { type: 'module' });
+    this.worker = worker;
     this.ready = new Promise((resolve, reject) => {
-      const onMsg = (ev: MessageEvent<WorkerResponse>) => {
+      worker.addEventListener('message', (ev: MessageEvent<WorkerResponse>) => {
         if (ev.data.type === 'ready') resolve();
         else if (ev.data.type === 'error' && ev.data.job === undefined) reject(new Error(ev.data.message));
-      };
-      this.worker.addEventListener('message', onMsg);
+      });
     });
-    this.worker.addEventListener('message', (ev: MessageEvent<WorkerResponse>) => {
+    this.ready.catch(() => {});
+    worker.addEventListener('message', (ev: MessageEvent<WorkerResponse>) => {
       const m = ev.data;
-      if (m.type === 'spread') {
-        this.inFlight--;
-        this.pending.get(m.job)?.resolve({ pockets: m.pockets, ms: m.ms, calibration: m.calibration, retried: m.retried, discarded: m.discarded });
-        this.pending.delete(m.job);
-      } else if (m.type === 'error' && m.job !== undefined) {
-        this.inFlight--;
-        this.pending.get(m.job)?.reject(new Error(m.message));
-        this.pending.delete(m.job);
-      }
+      if (m.type === 'spread') this.settle(m.job, (p) => p.resolve({ pockets: m.pockets, ms: m.ms, calibration: m.calibration, retried: m.retried, discarded: m.discarded }));
+      else if (m.type === 'error' && m.job !== undefined) this.settle(m.job, (p) => p.reject(new Error(m.message)));
     });
+    // The worker died (out of memory, or a crash): fail what it held and start a new one.
+    worker.addEventListener('error', (e) => this.restart(`the card reader crashed${e.message ? ` (${e.message})` : ''}`));
+    const db = this.db;
     const msg: WorkerRequest = { type: 'init', fps: db.fps.slice(), count: db.count, nameOf: db.nameOf.slice(), back: db.back?.slice() };
-    this.worker.postMessage(msg);
+    worker.postMessage(msg);
+  }
+
+  private settle(job: number, fn: (p: Pending) => void) {
+    const p = this.pending.get(job);
+    if (!p) return;
+    this.pending.delete(job);
+    clearTimeout(p.timer);
+    this.inFlight--;
+    fn(p);
+  }
+
+  private restart(why: string) {
+    if (this.worker) this.worker.terminate();
+    const failed = [...this.pending.values()];
+    this.pending.clear();
+    this.inFlight = 0;
+    this.restarts++;
+    this.spawn();
+    for (const p of failed) {
+      clearTimeout(p.timer);
+      p.reject(new Error(`A spread couldn’t be read: ${why}. Snap that page again if it’s missing.`));
+    }
   }
 
   /**
@@ -167,7 +195,8 @@ export class Recognizer {
     const job = this.nextJob++;
     this.inFlight++;
     return new Promise<SpreadReading>((resolve, reject) => {
-      this.pending.set(job, { resolve, reject });
+      const timer = setTimeout(() => this.restart('the card reader stopped responding'), JOB_TIMEOUT_MS);
+      this.pending.set(job, { resolve, reject, timer });
       const msg: WorkerRequest = { type: 'spread', job, runId, frames, calibration, tentative };
       this.worker.postMessage(msg, frames.map((f) => f.buffer));
     });
@@ -175,5 +204,8 @@ export class Recognizer {
 
   terminate() {
     this.worker.terminate();
+    for (const p of this.pending.values()) clearTimeout(p.timer);
+    this.pending.clear();
+    this.inFlight = 0;
   }
 }

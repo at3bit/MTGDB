@@ -19,7 +19,7 @@ interface Props {
   onCancel: () => void;
 }
 
-type Phase = 'opening' | 'calibrate' | 'running' | 'paused' | 'finishing';
+type Phase = 'opening' | 'calibrate' | 'running' | 'paused' | 'finishing' | 'stopped';
 
 const PHASE_TEXT: Record<RunStatus['phase'], string> = {
   watching: 'Watching',
@@ -195,10 +195,15 @@ export function ScanScreen({ binder, source, recognizer, spreadsSoFar, onSpread,
     setPhase('running');
     try {
       await ctrl.run();
+    } catch (e) {
+      ctrl.endedEarly ??= e instanceof Error ? e : new Error(String(e));
+      setError(ctrl.endedEarly.message);
     } finally {
       release();
     }
-    onDone();
+    // If the run stopped early, say so and let the user go on to review what was captured.
+    if (ctrl.endedEarly) setPhase('stopped');
+    else onDone();
   };
 
   const pause = () => {
@@ -331,6 +336,17 @@ export function ScanScreen({ binder, source, recognizer, spreadsSoFar, onSpread,
       )}
 
       {phase === 'finishing' && <p className="muted">Finishing… reading the last spreads.</p>}
+
+      {phase === 'stopped' && (
+        <div className="stack">
+          <p className="muted small" style={{ margin: 0 }}>
+            The scan stopped early. Everything captured up to here is kept: review and save it.
+          </p>
+          <button className="btn primary block" onClick={onDone}>
+            Review {spreadsSoFar} spread{spreadsSoFar === 1 ? '' : 's'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

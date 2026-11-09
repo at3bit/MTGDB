@@ -127,10 +127,18 @@ export async function openVideoFile(video: HTMLVideoElement, file: Blob, sampleF
       if (stopped) return false;
       t += step;
       if (t >= duration - 0.01) return false;
-      const seeked = waitEvent(video, 'seeked', 15_000);
-      video.currentTime = t;
-      await seeked;
-      return !stopped;
+      // Safari now and then drops a seek (no 'seeked' event); ask again rather than wait forever.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const seeked = waitEvent(video, 'seeked', 5_000);
+        video.currentTime = t + attempt * 0.001;
+        try {
+          await seeked;
+          return !stopped;
+        } catch {
+          if (stopped) return false;
+        }
+      }
+      throw new Error(`The video stopped responding at ${t.toFixed(1)} s.`);
     },
     progress: () => Math.min(1, Math.max(0, t / duration)),
     time: () => Math.max(0, t),
@@ -143,17 +151,30 @@ export async function openVideoFile(video: HTMLVideoElement, file: Blob, sampleF
   };
 }
 
+/** A 2D context, or a clear error (iOS refuses new canvases when its canvas memory is used up). */
+function context(c: HTMLCanvasElement, readBack: boolean): CanvasRenderingContext2D {
+  const ctx = c.getContext('2d', readBack ? { willReadFrequently: true } : undefined);
+  if (!ctx) throw new Error('The phone ran out of graphics memory. Close other apps and tabs, then try again.');
+  return ctx;
+}
+
+/** Resizes only when needed: setting a canvas's size, even to the same value, reallocates it. */
+function sized(c: HTMLCanvasElement, w: number, h: number) {
+  if (c.width !== w) c.width = w;
+  if (c.height !== h) c.height = h;
+  return c;
+}
+
 /** Reusable canvases for reading pixels out of the video element. */
 export class FrameReader {
   private thumbCanvas = document.createElement('canvas');
   private fullCanvas = document.createElement('canvas');
+  private keptCanvas = document.createElement('canvas');
+  private hasKept = false;
 
   /** Gray thumbnail of a normalised region of the current frame (used for page-turn detection). */
   thumb(video: HTMLVideoElement, region: { x0: number; y0: number; x1: number; y1: number }, w = 96, h = 54): GrayImage {
-    const c = this.thumbCanvas;
-    c.width = w;
-    c.height = h;
-    const ctx = c.getContext('2d', { willReadFrequently: true })!;
+    const ctx = context(sized(this.thumbCanvas, w, h), true);
     const vw = video.videoWidth, vh = video.videoHeight;
     ctx.drawImage(video, region.x0 * vw, region.y0 * vh, (region.x1 - region.x0) * vw, (region.y1 - region.y0) * vh, 0, 0, w, h);
     const d = ctx.getImageData(0, 0, w, h).data;
@@ -164,22 +185,43 @@ export class FrameReader {
 
   /** Full-resolution copy of the current frame. */
   full(video: HTMLVideoElement): WireImage {
-    const c = this.fullCanvas;
-    c.width = video.videoWidth;
-    c.height = video.videoHeight;
-    const ctx = c.getContext('2d', { willReadFrequently: true })!;
+    const c = sized(this.fullCanvas, video.videoWidth, video.videoHeight);
+    const ctx = context(c, true);
     ctx.drawImage(video, 0, 0);
     const img = ctx.getImageData(0, 0, c.width, c.height);
     return { width: c.width, height: c.height, buffer: img.data.buffer as ArrayBuffer };
   }
+
+  /**
+   * Keeps the current frame in case it's needed later (the stillest moment of a quick pause).
+   * Only a copy on the canvas: the 4K pixels (33 MB) are read out by kept() only if it's used.
+   */
+  keep(video: HTMLVideoElement) {
+    const c = sized(this.keptCanvas, video.videoWidth, video.videoHeight);
+    context(c, false).drawImage(video, 0, 0);
+    this.hasKept = true;
+  }
+
+  /** The frame last kept with keep(), or null. */
+  kept(): WireImage | null {
+    if (!this.hasKept) return null;
+    this.hasKept = false;
+    const c = this.keptCanvas;
+    const img = context(c, false).getImageData(0, 0, c.width, c.height);
+    return { width: c.width, height: c.height, buffer: img.data.buffer as ArrayBuffer };
+  }
+
+  dropKept() {
+    this.hasKept = false;
+  }
 }
 
-/** RGBA buffer -> JPEG data URL (for thumbnails in the review screen). */
+const dataUrlCanvas = typeof document === 'undefined' ? null : document.createElement('canvas');
+
+/** RGBA buffer -> JPEG data URL (for thumbnails in the review screen). One shared canvas: iOS is slow to free canvases. */
 export function imageToDataURL(img: WireImage, quality = 0.85): string {
-  const c = document.createElement('canvas');
-  c.width = img.width;
-  c.height = img.height;
-  c.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(img.buffer), img.width, img.height), 0, 0);
+  const c = sized(dataUrlCanvas!, img.width, img.height);
+  context(c, false).putImageData(new ImageData(new Uint8ClampedArray(img.buffer), img.width, img.height), 0, 0);
   return c.toDataURL('image/jpeg', quality);
 }
 

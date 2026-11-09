@@ -128,6 +128,23 @@ const page = await browser.newPage({ viewport: { width: 390, height: 844 }, devi
 const logs: string[] = [];
 page.on('console', (m: any) => logs.push(`${m.type()}: ${m.text()}`));
 page.on('pageerror', (e: Error) => logs.push(`pageerror: ${e.message}`));
+page.on('dialog', (d: any) => d.accept()); // "Discard this scan?"
+// Lets a phase drop video seeks the way Safari sometimes does (no 'seeked' event): window.__seeks = { n, drop: [k…], deadFrom }.
+await page.addInitScript(() => {
+  const w = window as any;
+  w.__seeks = { n: 0, drop: [], deadFrom: Infinity };
+  const desc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'currentTime')!;
+  Object.defineProperty(HTMLMediaElement.prototype, 'currentTime', {
+    configurable: true,
+    get() { return desc.get!.call(this); },
+    set(v: number) {
+      const s = w.__seeks;
+      s.n++;
+      if (s.drop.includes(s.n) || s.n >= s.deadFrom) return;
+      desc.set!.call(this, v);
+    },
+  });
+});
 let failed = false;
 const check = (cond: boolean, msg: string) => { console.log(`${cond ? 'PASS' : 'FAIL'} ${msg}`); if (!cond) failed = true; };
 
@@ -224,6 +241,62 @@ try {
   const fastRight = fastTiles.filter((n, i) => n === expected[i]).length;
   check(fastSpreads === 3 && fastRight >= 52, `quick flips: ${fastSpreads} spreads (expected 3), ${fastRight}/${fastTiles.length} pockets right`);
   await page.getByRole('button', { name: /Home|Discard|Cancel/ }).first().click().catch(() => {});
+
+  const uploadRun = async (name: string, path: string) => {
+    await page.getByRole('button', { name: 'Scan a binder' }).click();
+    await page.locator('input[type=text]').fill(name);
+    await page.setInputFiles('[data-testid=video-input]', path);
+    await page.getByRole('button', { name: 'Process video' }).waitFor({ timeout: 20000 });
+    await page.waitForTimeout(500);
+    await page.evaluate(() => ((window as any).__seeks.n = 0));
+    await page.getByRole('button', { name: 'Process video' }).click();
+  };
+  const reviewed = async () => {
+    const spreads = await page.locator('strong', { hasText: /^Spread \d+$/ }).count();
+    const names: string[] = await page.locator('.tile').evaluateAll((els: Element[]) => els.map((e) => e.querySelector('.name')?.textContent ?? ''));
+    return { spreads, right: names.filter((n, i) => n === expected[i]).length, total: names.length };
+  };
+
+  // Pause & adjust in the middle of an uploaded video: drag a corner, continue, and the run finishes normally.
+  await uploadRun('Paused Run', videoPath);
+  await page.waitForTimeout(2500);
+  await page.getByRole('button', { name: 'Pause & adjust' }).click();
+  await page.getByRole('button', { name: 'Continue' }).waitFor();
+  const seeksAtPause = await page.evaluate(() => (window as any).__seeks.n);
+  await page.waitForTimeout(1500);
+  const seeksPaused = (await page.evaluate(() => (window as any).__seeks.n)) - seeksAtPause;
+  const box = (await page.locator('circle.handle').first().boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 3, box.y + box.height / 2 + 2, { steps: 4 });
+  await page.mouse.up();
+  await page.screenshot({ path: join(out, '10-upload-paused.png') });
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await page.getByText('Review “Paused Run”').waitFor({ timeout: 120000 });
+  const paused = await reviewed();
+  check(seeksPaused <= 1 && paused.spreads === 3 && paused.right >= 52, `pause & adjust mid-upload: video held while paused (${seeksPaused} seeks), then ${paused.spreads} spreads, ${paused.right}/${paused.total} pockets right`);
+  await page.getByRole('button', { name: /Discard/ }).click();
+
+  // Safari sometimes drops a seek: the run asks again and carries on.
+  await uploadRun('Dropped Seek', videoPath);
+  await page.evaluate(() => ((window as any).__seeks.drop = [40]));
+  await page.getByText('Review “Dropped Seek”').waitFor({ timeout: 120000 });
+  const dropped = await reviewed();
+  check(dropped.spreads === 3 && dropped.right >= 52, `a dropped seek is retried: ${dropped.spreads} spreads, ${dropped.right}/${dropped.total} pockets right`);
+  await page.getByRole('button', { name: /Discard/ }).click();
+
+  // A video that stops responding part-way: the scan says so and keeps what it captured.
+  await uploadRun('Dead Video', videoPath);
+  await page.evaluate(() => ((window as any).__seeks = { n: (window as any).__seeks.n, drop: [], deadFrom: 70 }));
+  await page.getByText('The scan stopped early').waitFor({ timeout: 60000 });
+  const message = await page.locator('.notice.error').textContent();
+  await page.screenshot({ path: join(out, '12-stopped-early.png') });
+  await page.getByRole('button', { name: /^Review \d+ spread/ }).click();
+  await page.getByText('Review “Dead Video”').waitFor({ timeout: 10000 });
+  const dead = await reviewed();
+  check(dead.spreads >= 1 && /stopped responding/.test(message ?? ''), `video stops responding: "${message}"; ${dead.spreads} spread(s) kept for review`);
+  await page.evaluate(() => ((window as any).__seeks = { n: 0, drop: [], deadFrom: Infinity }));
+  await page.getByRole('button', { name: /Discard/ }).click();
 } catch (e) {
   failed = true;
   console.error(e);

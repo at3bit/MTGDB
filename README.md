@@ -82,6 +82,9 @@ link. Each person's collection is stored only on their own phone.
   can be the shutter. A click sound and a green flash confirm each capture.
 - **Pause & adjust**: as the page stacks shift, pause, drag the outline onto
   the pages as they sit now, and continue. Page tracking restarts from it.
+- If the video stops responding part-way (Safari now and then drops a seek;
+  each is retried) or the card reader crashes (it restarts), the scan says so
+  and keeps everything captured up to then, rather than freezing.
 - Quantities aren't tracked: a binder stores one entry per printing (and
   finish), and the collection totals count each printing once.
 - **Do I own…?** on the home screen searches every binder; **Browse all**

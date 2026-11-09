@@ -42,6 +42,8 @@ export class RunController {
   private snapRequested = false;
   /** Changes when the outline is re-lined-up, so page tracking restarts from it. */
   private runId = Date.now();
+  /** Why the run stopped before the end, if it did (the video stopped responding, frames couldn't be read). */
+  endedEarly: Error | null = null;
 
   constructor(
     private src: FrameSource,
@@ -81,94 +83,139 @@ export class RunController {
     return this.paused;
   }
 
+  /** A capture waiting to be sent to the recognizer (a second frame may still be added). `brief`: from a pause too short to settle. */
+  private pending: { frames: WireImage[]; time: number; change: number; manual: boolean; brief?: boolean } | null = null;
+  /** Set while the reader keeps the stillest frame of a pause, in case the page is turned again before it settles. */
+  private candidate: { time: number } | null = null;
+  private jobs: Promise<void>[] = [];
+
   async run(): Promise<void> {
     this.running = true;
     let bounds = calibrationBounds(this.cal);
-    const jobs: Promise<void>[] = [];
-    /** `brief`: from a pause too short to settle, so it may have caught the page mid-turn. */
-    let pending: { frames: WireImage[]; time: number; change: number; manual: boolean; brief?: boolean } | null = null;
-    /** Frame kept from the stillest moment of a pause, in case the page is turned again before it settles. */
-    let candidate: { frame: WireImage; time: number } | null = null;
-
-    const dispatch = () => {
-      if (!pending) return;
-      const p = pending;
-      pending = null;
-      this.captured++;
-      jobs.push(
-        this.rec
-          .recognize(p.frames, this.cal, this.runId, p.brief)
-          .then((r) => {
-            if (r.discarded) {
-              this.captured--;
-              return;
-            }
-            // A quick-pause capture only clicks once it's known to show a page.
-            if (p.brief) this.on.captured?.('auto');
-            this.on.spread({ ...r, time: p.time, change: p.change, manual: p.manual });
-          })
-          .catch((e) => this.on.error(e)),
-      );
+    let failures = 0;
+    const endEarly = (e: unknown) => {
+      this.endedEarly = e instanceof Error ? e : new Error(String(e));
+      this.on.error(this.endedEarly);
     };
-    const status = (phase: RunStatus['phase']) =>
-      this.on.status({
-        phase,
-        motion: this.watcher.lastDiff,
-        progress: this.src.progress(),
-        captured: this.captured,
-        processing: this.rec.inFlight + (pending ? 1 : 0),
-      });
 
     while (this.running) {
       if (this.paused) {
-        dispatch();
-        status('paused');
+        this.dispatch();
+        this.dropCandidate();
+        this.status('paused');
         await new Promise<void>((resolve) => (this.wake = resolve));
         this.wake = null;
         bounds = calibrationBounds(this.cal);
         continue;
       }
-      if (!(await this.src.next())) break;
-      const thumb = this.reader.thumb(this.src.video, bounds);
-      const ev = this.watcher.push(thumb);
-      if (pending) {
-        // A second frame of the same settled view lets the recognizer pick the sharper crop per pocket.
-        if (this.watcher.state === 'settled' && !ev) pending.frames.push(this.reader.full(this.src.video));
-        dispatch();
+      let more: boolean;
+      try {
+        more = await this.src.next();
+      } catch (e) {
+        endEarly(e);
+        break;
       }
-      if (this.snapRequested) {
-        this.snapRequested = false;
-        const change = this.watcher.changeFrom(thumb);
-        this.watcher.markCaptured(thumb);
-        pending = { frames: [this.reader.full(this.src.video)], time: this.src.time(), change, manual: true };
-        this.on.captured?.('manual');
-        dispatch();
-      } else if (this.mode === 'auto' && ev?.type === 'settled' && ev.newSpread) {
-        candidate = null;
-        this.watcher.markCaptured(thumb);
-        pending = { frames: [this.reader.full(this.src.video)], time: this.src.time(), change: ev.changeFromLast, manual: false };
-        this.on.captured?.('auto');
-        // If the recognizer is behind, one frame is enough.
-        if (this.rec.inFlight >= 2) dispatch();
-      } else if (this.mode === 'auto' && ev?.type === 'candidate') {
-        candidate = { frame: this.reader.full(this.src.video), time: this.src.time() };
-      } else if (ev?.type === 'brief') {
-        // A quick turn: the page never settled, so use the stillest moment of the pause.
-        if (this.mode === 'auto' && ev.newSpread && candidate) {
-          dispatch();
-          pending = { frames: [candidate.frame], time: candidate.time, change: ev.changeFromLast, manual: false, brief: true };
-          dispatch();
+      if (!more) break;
+      try {
+        this.sample(bounds);
+        failures = 0;
+      } catch (e) {
+        // A frame that can't be read is skipped; if it keeps happening, stop and keep what was captured.
+        console.warn('frame skipped', e);
+        if (++failures >= 5) {
+          endEarly(e);
+          break;
         }
-        candidate = null;
       }
-      if (ev?.type === 'settled') candidate = null;
-      status(this.watcher.state === 'moving' ? 'moving' : ev?.type === 'settled' ? 'settled' : 'watching');
-      // Uploaded videos can wait for the recognizer; a live camera can't.
-      if (this.src.kind === 'file') while (this.rec.inFlight >= 2) await sleep(50);
+      // Uploaded videos can wait for the recognizer (a live camera can't); pausing or stopping doesn't wait.
+      if (this.src.kind === 'file') while (this.running && !this.paused && this.rec.inFlight >= 2) await sleep(50);
     }
-    dispatch();
-    status('finishing');
-    await Promise.all(jobs);
-    status('done');
+    this.dispatch();
+    this.dropCandidate();
+    this.status('finishing');
+    await Promise.all(this.jobs);
+    this.status('done');
+  }
+
+  /** One sample of the video: page-turn detection and captures. */
+  private sample(bounds: ReturnType<typeof calibrationBounds>) {
+    const video = this.src.video;
+    const thumb = this.reader.thumb(video, bounds);
+    const ev = this.watcher.push(thumb);
+    if (this.pending) {
+      // A second frame of the same settled view lets the recognizer pick the sharper crop per pocket.
+      if (this.watcher.state === 'settled' && !ev) this.pending.frames.push(this.reader.full(video));
+      this.dispatch();
+    }
+    const auto = this.mode === 'auto';
+    if (this.snapRequested) {
+      this.snapRequested = false;
+      const change = this.watcher.changeFrom(thumb);
+      this.watcher.markCaptured(thumb);
+      this.pending = { frames: [this.reader.full(video)], time: this.src.time(), change, manual: true };
+      this.on.captured?.('manual');
+      this.dispatch();
+    } else if (auto && ev?.type === 'settled' && ev.newSpread) {
+      this.dropCandidate();
+      this.watcher.markCaptured(thumb);
+      this.pending = { frames: [this.reader.full(video)], time: this.src.time(), change: ev.changeFromLast, manual: false };
+      this.on.captured?.('auto');
+      // If the recognizer is behind, one frame is enough.
+      if (this.rec.inFlight >= 2) this.dispatch();
+    } else if (auto && ev?.type === 'candidate') {
+      this.reader.keep(video);
+      this.candidate = { time: this.src.time() };
+    } else if (ev?.type === 'brief') {
+      // A quick turn: the page never settled, so use the stillest moment of the pause.
+      const kept = this.candidate;
+      const frame = auto && ev.newSpread && kept ? this.reader.kept() : null;
+      if (frame && kept) {
+        this.dispatch();
+        this.pending = { frames: [frame], time: kept.time, change: ev.changeFromLast, manual: false, brief: true };
+        this.dispatch();
+      }
+      this.dropCandidate();
+    }
+    if (ev?.type === 'settled') this.dropCandidate();
+    this.status(this.watcher.state === 'moving' ? 'moving' : ev?.type === 'settled' ? 'settled' : 'watching');
+  }
+
+  private dropCandidate() {
+    this.candidate = null;
+    this.reader.dropKept();
+  }
+
+  private dispatch() {
+    const p = this.pending;
+    if (!p) return;
+    this.pending = null;
+    this.captured++;
+    this.jobs.push(
+      this.rec
+        .recognize(p.frames, this.cal, this.runId, p.brief)
+        .then((r) => {
+          if (r.discarded) {
+            this.captured--;
+            return;
+          }
+          // A quick-pause capture only clicks once it's known to show a page.
+          if (p.brief) this.on.captured?.('auto');
+          this.on.spread({ ...r, time: p.time, change: p.change, manual: p.manual });
+        })
+        .catch((e) => {
+          this.captured--;
+          this.on.error(e);
+        }),
+    );
+  }
+
+  private status(phase: RunStatus['phase']) {
+    this.on.status({
+      phase,
+      motion: this.watcher.lastDiff,
+      progress: this.src.progress(),
+      captured: this.captured,
+      processing: this.rec.inFlight + (this.pending ? 1 : 0),
+    });
   }
 }

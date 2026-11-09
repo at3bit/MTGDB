@@ -50,11 +50,20 @@ function prepare(img: WireImage, invert: boolean): HTMLCanvasElement {
 
 export async function readCardName(img: WireImage): Promise<{ text: string; confidence: number }> {
   const w = await getWorker();
-  const a = await w.recognize(prepare(img, false));
-  let best = { text: a.data.text.trim(), confidence: a.data.confidence };
+  // Free each canvas as soon as it's read: iOS counts canvases against a memory limit until they're collected.
+  const read = async (invert: boolean) => {
+    const c = prepare(img, invert);
+    try {
+      return (await w.recognize(c)).data;
+    } finally {
+      c.width = c.height = 0;
+    }
+  };
+  const a = await read(false);
+  let best = { text: a.text.trim(), confidence: a.confidence };
   if (best.confidence < 70) {
-    const b = await w.recognize(prepare(img, true));
-    if (b.data.confidence > best.confidence) best = { text: b.data.text.trim(), confidence: b.data.confidence };
+    const b = await read(true);
+    if (b.confidence > best.confidence) best = { text: b.text.trim(), confidence: b.confidence };
   }
   return best;
 }
