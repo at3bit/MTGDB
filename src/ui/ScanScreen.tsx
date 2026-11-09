@@ -84,6 +84,9 @@ export function ScanScreen({ binder, source, recognizer, spreadsSoFar, onSpread,
   const [mode, setModeState] = useState<CaptureMode>(() => (read(MODE_KEY, 'auto') === 'manual' ? 'manual' : 'auto'));
   const [sound, setSoundState] = useState(() => read(SOUND_KEY, 'on') === 'on');
   const [flash, setFlash] = useState(0);
+  const [openStep, setOpenStep] = useState<string | null>(null);
+  const [slowOpen, setSlowOpen] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const isFile = source !== 'camera';
 
   const setPhase = (p: Phase) => {
@@ -104,10 +107,14 @@ export function ScanScreen({ binder, source, recognizer, spreadsSoFar, onSpread,
 
   useEffect(() => {
     let cancelled = false;
+    setSlowOpen(false);
+    setError(null);
+    // If opening takes unusually long, say so and offer a retry instead of looking stuck.
+    const slow = setTimeout(() => !cancelled && phaseRef.current === 'opening' && setSlowOpen(true), 20_000);
     (async () => {
       try {
         const video = videoRef.current!;
-        const src = source === 'camera' ? await openCamera(video) : await openVideoFile(video, source);
+        const src = source === 'camera' ? await openCamera(video) : await openVideoFile(video, source, undefined, setOpenStep);
         if (cancelled) return src.stop();
         srcRef.current = src;
         const w = src.width, h = src.height;
@@ -117,8 +124,9 @@ export function ScanScreen({ binder, source, recognizer, spreadsSoFar, onSpread,
           setCal(saved.calibration);
           setRotation(saved.rotation);
         } else {
-          setCal(defaultCalibration(w, h, w >= h ? 0 : 90));
-          setRotation(w >= h ? 0 : 90);
+          // Landscape: an open binder. Portrait: one upright page.
+          setCal(defaultCalibration(w, h, 0, w >= h ? 2 : 1));
+          setRotation(0);
         }
         if (source !== 'camera') {
           // Show a frame from a moment in, for lining up the outline.
@@ -131,10 +139,11 @@ export function ScanScreen({ binder, source, recognizer, spreadsSoFar, onSpread,
     })();
     return () => {
       cancelled = true;
+      clearTimeout(slow);
       ctrlRef.current?.stop();
       srcRef.current?.stop();
     };
-  }, [source]);
+  }, [source, attempt]);
 
   // Keyboard / Bluetooth page-turner pedals and remotes: Space, Enter, → or Page Down snaps a page.
   useEffect(() => {
@@ -232,7 +241,17 @@ export function ScanScreen({ binder, source, recognizer, spreadsSoFar, onSpread,
         </div>
       </div>
 
-      {phase === 'opening' && !error && <p className="muted">{isFile ? 'Opening video…' : 'Starting camera… allow camera access if Safari asks.'}</p>}
+      {phase === 'opening' && !error && <p className="muted">{isFile ? openStep ?? 'Opening video…' : 'Starting camera… allow camera access if Safari asks.'}</p>}
+      {phase === 'opening' && (slowOpen || error) && (
+        <div className="stack">
+          {slowOpen && !error && (
+            <p className="muted small" style={{ margin: 0 }}>
+              This is taking longer than usual. Long 4K videos can be slow to open; if nothing happens, try again, or trim the video in Photos first.
+            </p>
+          )}
+          <button className="btn block" onClick={() => { srcRef.current?.stop(); srcRef.current = null; setAttempt((n) => n + 1); }}>Try again</button>
+        </div>
+      )}
 
       {phase === 'calibrate' && cal && (
         <div className="stack">

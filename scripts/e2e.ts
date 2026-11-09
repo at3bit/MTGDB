@@ -197,6 +197,41 @@ try {
   await browser.close();
 }
 
+// ---- Opening a portrait video on a browser where play() never settles (seen on an iPhone):
+// the app must still get to the outline screen, with the one-upright-page layout.
+const portraitPath = join(out, 'portrait.webm');
+await new Promise<void>((resolve, reject) => {
+  const ff = spawn('ffmpeg', ['-y', '-loglevel', 'error', '-i', videoPath, '-vf', 'transpose=1', '-t', '3', '-c:v', 'libvpx-vp9', '-deadline', 'realtime', '-cpu-used', '8', portraitPath]);
+  ff.on('error', reject);
+  ff.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}`))));
+});
+{
+  const b2 = await chromium.launch();
+  const p2 = await b2.newPage({ viewport: { width: 390, height: 844 } });
+  await p2.addInitScript(() => {
+    HTMLMediaElement.prototype.play = function () {
+      return new Promise(() => {}); // never settles
+    };
+  });
+  try {
+    await p2.goto('http://localhost:4173/?db=test-data');
+    await p2.getByRole('button', { name: 'Scan a binder' }).click({ timeout: 20000 });
+    const t0 = Date.now();
+    await p2.setInputFiles('[data-testid=video-input]', portraitPath);
+    await p2.getByRole('button', { name: 'Process video' }).waitFor({ timeout: 15000 });
+    const onePage = await p2.getByRole('button', { name: 'One page' }).getAttribute('class');
+    check(true, `video opened in ${((Date.now() - t0) / 1000).toFixed(1)} s although play() never settles`);
+    check(onePage === 'on', `portrait video defaults to one upright page (${onePage === 'on' ? 'yes' : 'no'})`);
+    await p2.screenshot({ path: join(out, '11-portrait-open.png') });
+  } catch (e) {
+    failed = true;
+    console.error('portrait/hanging-play check failed:', e);
+    await p2.screenshot({ path: join(out, 'error-portrait.png') }).catch(() => {});
+  } finally {
+    await b2.close();
+  }
+}
+
 // ---- Live camera: Snap, Pause & adjust, Continue, keyboard snap.
 // Chromium plays a video file as the camera: spread 1 for 11 s, then spread 2.
 const camPath = join(out, 'camera.y4m');

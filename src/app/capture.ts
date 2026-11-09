@@ -71,21 +71,32 @@ export async function openCamera(video: HTMLVideoElement, sampleFps = 10): Promi
   };
 }
 
-export async function openVideoFile(video: HTMLVideoElement, file: Blob, sampleFps = 10): Promise<FrameSource> {
+export async function openVideoFile(video: HTMLVideoElement, file: Blob, sampleFps = 10, onStep?: (step: string) => void): Promise<FrameSource> {
   const url = URL.createObjectURL(file);
   video.muted = true;
   video.playsInline = true;
   video.preload = 'auto';
+  onStep?.('Reading the video…');
   video.src = url;
-  await waitEvent(video, 'loadedmetadata', 30_000);
-  // iOS Safari won't paint a video's frames to a canvas until it has played once.
-  try {
-    await video.play();
-    video.pause();
-  } catch {
-    /* autoplay of muted video is allowed; ignore if not */
+  if (video.readyState < 1) {
+    await waitEvent(video, 'loadedmetadata', 30_000).catch(() => {
+      throw new Error('This video couldn’t be opened (no response after 30 s). Try recording it again with the Camera app, or a shorter clip.');
+    });
   }
+  // iOS Safari won't paint a video's frames to a canvas until it has played once. But with some files
+  // play() never settles, so don't wait for it for more than a moment; pause() also settles it.
+  onStep?.('Preparing frames…');
+  try {
+    await Promise.race([video.play(), new Promise((r) => setTimeout(r, 1500))]);
+  } catch {
+    /* autoplay refused: frames are usually still readable */
+  }
+  video.pause();
+  if (!video.videoWidth) await waitEvent(video, 'loadeddata', 10_000).catch(() => {});
   const duration = video.duration;
+  if (!video.videoWidth || !Number.isFinite(duration) || duration <= 0) {
+    throw new Error('Couldn’t read this video’s size or length. Try recording it again with the Camera app.');
+  }
   let t = -1 / sampleFps;
   let stopped = false;
   const step = 1 / sampleFps;
