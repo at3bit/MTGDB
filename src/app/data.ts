@@ -48,7 +48,15 @@ export async function loadBaselines(db: CardDB): Promise<Baselines | null> {
   }
 }
 
-type Pending = { resolve: (p: { pockets: WirePocket[]; ms: number }) => void; reject: (e: Error) => void };
+export interface SpreadReading {
+  pockets: WirePocket[];
+  ms: number;
+  /** Where the pages were found in this spread. */
+  calibration: Calibration;
+  retried: number[];
+}
+
+type Pending = { resolve: (p: SpreadReading) => void; reject: (e: Error) => void };
 
 export class Recognizer {
   private worker: Worker;
@@ -70,7 +78,7 @@ export class Recognizer {
       const m = ev.data;
       if (m.type === 'spread') {
         this.inFlight--;
-        this.pending.get(m.job)?.resolve({ pockets: m.pockets, ms: m.ms });
+        this.pending.get(m.job)?.resolve({ pockets: m.pockets, ms: m.ms, calibration: m.calibration, retried: m.retried });
         this.pending.delete(m.job);
       } else if (m.type === 'error' && m.job !== undefined) {
         this.inFlight--;
@@ -82,13 +90,14 @@ export class Recognizer {
     this.worker.postMessage(msg);
   }
 
-  async recognize(frames: WireImage[], calibration: Calibration) {
+  /** `calibration` is the user's outline; spreads with the same `runId` are tracked from one to the next. */
+  async recognize(frames: WireImage[], calibration: Calibration, runId: number) {
     await this.ready;
     const job = this.nextJob++;
     this.inFlight++;
-    return new Promise<{ pockets: WirePocket[]; ms: number }>((resolve, reject) => {
+    return new Promise<SpreadReading>((resolve, reject) => {
       this.pending.set(job, { resolve, reject });
-      const msg: WorkerRequest = { type: 'spread', job, frames, calibration };
+      const msg: WorkerRequest = { type: 'spread', job, runId, frames, calibration };
       this.worker.postMessage(msg, frames.map((f) => f.buffer));
     });
   }

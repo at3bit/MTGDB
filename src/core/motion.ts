@@ -25,9 +25,28 @@ export interface MotionConfig {
 export const DEFAULT_MOTION: MotionConfig = {
   moveThreshold: 4,
   stillThreshold: 2,
-  stillFrames: 3,
-  newSpreadThreshold: 0.25,
+  stillFrames: 2,
+  // Low on purpose: any settled view that differs at all is captured, and
+  // repeat captures of the same spread are merged later by card name (keeping
+  // the better reading of each pocket, e.g. once a resting hand has lifted).
+  newSpreadThreshold: 0.08,
 };
+
+/**
+ * Rescales a thumbnail to a fixed mean and contrast, so the camera's
+ * auto-exposure settling after a page turn doesn't count as movement.
+ */
+export function normalizeBrightness(g: GrayImage): GrayImage {
+  let s = 0, s2 = 0;
+  for (const v of g.data) { s += v; s2 += v * v; }
+  const n = g.data.length;
+  const mean = s / n;
+  const std = Math.sqrt(Math.max(0, s2 / n - mean * mean));
+  const k = std > 1 ? 50 / std : 1;
+  const data = new Float32Array(n);
+  for (let i = 0; i < n; i++) data[i] = 128 + (g.data[i] - mean) * k;
+  return { width: g.width, height: g.height, data };
+}
 
 export type MotionEvent =
   | { type: 'moving'; diff: number }
@@ -43,7 +62,8 @@ export class SpreadWatcher {
   constructor(private cfg: MotionConfig = DEFAULT_MOTION) {}
 
   /** Feed one thumbnail (same size every time). Returns an event on state changes. */
-  push(thumb: GrayImage): MotionEvent | null {
+  push(raw: GrayImage): MotionEvent | null {
+    const thumb = normalizeBrightness(raw);
     const prev = this.prev;
     this.prev = thumb;
     if (!prev) return null;
@@ -70,8 +90,8 @@ export class SpreadWatcher {
   }
 
   /** Record the thumbnail of the spread that was just captured. */
-  markCaptured(thumb: GrayImage) {
-    this.lastCaptured = thumb;
+  markCaptured(raw: GrayImage) {
+    this.lastCaptured = normalizeBrightness(raw);
   }
 
   reset() {

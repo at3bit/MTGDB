@@ -3,8 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { defaultCalibration, type Calibration, type Rotation } from '../core/geometry.ts';
 import { keepAwake, openCamera, openVideoFile, type FrameSource } from '../app/capture.ts';
 import { RunController, type RunStatus } from '../app/run.ts';
-import type { Recognizer } from '../app/data.ts';
-import type { WirePocket } from '../app/protocol.ts';
+import type { Recognizer, SpreadReading } from '../app/data.ts';
 import { loadCalibration, saveCalibration } from '../app/store.ts';
 import { QuadOverlay } from './QuadOverlay.tsx';
 
@@ -13,7 +12,7 @@ interface Props {
   source: 'camera' | File;
   recognizer: Recognizer;
   spreadsSoFar: number;
-  onSpread: (r: { pockets: WirePocket[]; ms: number; time: number }, pagesPerSpread: number) => void;
+  onSpread: (r: SpreadReading & { time: number }, pagesPerSpread: number) => void;
   onDone: () => void;
   onCancel: () => void;
 }
@@ -88,7 +87,11 @@ export function ScanScreen({ binder, source, recognizer, spreadsSoFar, onSpread,
     const release = await keepAwake();
     const ctrl = new RunController(srcRef.current, cal, recognizer, {
       status: setStatus,
-      spread: (r) => onSpread(r, pagesPerSpread),
+      spread: (r) => {
+        onSpread(r, pagesPerSpread);
+        // Show the outline where the pages were actually found, so you can see it follow them.
+        setCal(r.calibration);
+      },
       error: (e) => setError(e.message),
     });
     ctrlRef.current = ctrl;

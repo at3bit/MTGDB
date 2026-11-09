@@ -32,7 +32,7 @@ function waitEvent(el: EventTarget, name: string, timeoutMs = 10_000): Promise<v
   });
 }
 
-export async function openCamera(video: HTMLVideoElement, sampleFps = 6): Promise<FrameSource> {
+export async function openCamera(video: HTMLVideoElement, sampleFps = 10): Promise<FrameSource> {
   if (!navigator.mediaDevices?.getUserMedia) throw new Error('This browser does not allow camera access here. Open the app over https in Safari.');
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: false,
@@ -71,7 +71,7 @@ export async function openCamera(video: HTMLVideoElement, sampleFps = 6): Promis
   };
 }
 
-export async function openVideoFile(video: HTMLVideoElement, file: Blob, sampleFps = 6): Promise<FrameSource> {
+export async function openVideoFile(video: HTMLVideoElement, file: Blob, sampleFps = 10): Promise<FrameSource> {
   const url = URL.createObjectURL(file);
   video.muted = true;
   video.playsInline = true;

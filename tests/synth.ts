@@ -116,6 +116,8 @@ export interface RenderOptions {
   calibError?: number;
   /** Seed for per-frame sensor noise only (layout stays the same). Defaults to `seed`. */
   noiseSeed?: number;
+  /** Where the pages actually are in this frame (normalised). Defaults to SCENE_PAGES. */
+  pages?: Quad[];
   /** Milky veil from pocket plastic: 0 = none, 0.15 = typical sleeve. */
   haze?: number;
   /** Optional occluder (e.g. a hand) as a dark ellipse in normalised coords. */
@@ -151,12 +153,13 @@ export function renderSpread(cards: (RGBAImage | null)[], o: RenderOptions): Spr
   const frame = createRGBA(W, H);
   fillRect(frame, 0, 0, W, H, [118, 86, 60]); // table
   const px = (q: Quad): Quad => q.map((p) => ({ x: p.x * W, y: p.y * H })) as Quad;
-  for (const page of SCENE_PAGES) {
+  const scenePages = o.pages ?? SCENE_PAGES;
+  for (const page of scenePages) {
     const outer = subQuad(px(page), -0.03, -0.025, 1.03, 1.025);
     drawQuad(frame, (() => { const i = createRGBA(4, 4); fillRect(i, 0, 0, 4, 4, [28, 28, 32]); return i; })(), outer);
   }
   const jitter = o.jitter ?? 0.015;
-  SCENE_PAGES.forEach((page, pi) => {
+  scenePages.forEach((page, pi) => {
     for (let s = 0; s < 9; s++) {
       const card = cards[pi * 9 + s];
       if (!card) continue;
@@ -202,6 +205,6 @@ export function renderSpread(cards: (RGBAImage | null)[], o: RenderOptions): Spr
     }
   }
   const err = o.calibError ?? 0;
-  const calPages = SCENE_PAGES.map((q) => q.map((p) => ({ x: p.x + (r() * 2 - 1) * err, y: p.y + (r() * 2 - 1) * err })) as Quad);
+  const calPages = scenePages.map((q) => q.map((p) => ({ x: p.x + (r() * 2 - 1) * err, y: p.y + (r() * 2 - 1) * err })) as Quad);
   return { frame, calibration: { pages: calPages, rows: 3, cols: 3 } };
 }

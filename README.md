@@ -16,23 +16,33 @@ link. Each person's collection is stored only on their own phone.
 ## How recognition works
 
 1. **Page-turn detection** (`src/core/motion.ts`). The app samples the video
-   ~6 times a second and compares small thumbnails. When the view goes still
-   after movement, it captures that spread. If a still view matches the last
-   capture (a hand passed over without turning), it's skipped.
-2. **Pocket extraction** (`src/core/geometry.ts`, `src/core/recognize.ts`).
-   You line up an outline over the pages once per tripod setup. Each pocket is
+   10 times a second and compares small thumbnails, adjusted for brightness so
+   the camera's auto-exposure settling after a turn doesn't count as movement. When the view has been still
+   for a moment after movement, it captures that spread. Every settled view is
+   captured, and repeat captures of the same spread (a hand passed over, or
+   rested on the page and lifted) are merged by card name, keeping the better
+   reading of each pocket.
+2. **Page tracking** (`src/core/align.ts`, `src/core/scan.ts`). You line up
+   an outline over the pages once, but in a thick binder the pages don't stay
+   put: the page stacks change height as you turn (pages get bigger or smaller
+   in the frame), and the binder gets nudged. On every spread the app re-finds
+   each page by matching the typical edge pattern of a card (border, name bar,
+   type line), measured from real scans, starting from where the page was on
+   the previous spread. A page where most cards read badly is re-read from
+   other placements.
+3. **Pocket extraction** (`src/core/geometry.ts`, `src/core/recognize.ts`). Each pocket is
    perspective-corrected into a straight card image. When two frames of a spread
    are captured, the app keeps the sharper, less glary crop of each pocket.
-3. **Image match** (`src/core/fingerprint.ts`). Each card gets a 160-bit visual
+4. **Image match** (`src/core/fingerprint.ts`). Each card gets a 160-bit visual
    fingerprint: the whole card's structure, the art box's structure, and the
    colour layout. It's compared against the fingerprints of every paper printing
    on Scryfall (~100k). Several slightly shifted placements are tried, since
    cards slide around in their pockets. A spread takes about half a second.
-4. **Name reading** (`src/app/ocr.ts`). When the image match isn't conclusive,
+5. **Name reading** (`src/app/ocr.ts`). When the image match isn't conclusive,
    the app reads the title line with Tesseract (served by the app itself) and
    fuzzy-matches it to card names. It then picks the closest-looking printing of
    that name.
-5. **Printing.** Once the name is known, the app picks the printing from
+6. **Printing.** Once the name is known, the app picks the printing from
    the closest look-alikes (`src/core/printing.ts`). It reads the printed
    border colour from the photo and checks it against Scryfall's
    `border_color`, which separates black-bordered originals from white-bordered
@@ -40,7 +50,7 @@ link. Each person's collection is stored only on their own phone.
    but are priced differently, it prefers the regular printing over a promo and
    marks the pocket **Which printing?** for you to confirm. Examples are Beta
    vs. Collectors' Edition, or a set card vs. its promo.
-6. **Review.** Green pockets were identified. Orange means check it, red means
+7. **Review.** Green pockets were identified. Orange means check it, red means
    unknown. Tap any pocket to compare your photo with the match, switch
    printing or foil, or search by name.
 
@@ -74,6 +84,7 @@ npm run data         # build public/data/ from Scryfall (needs internet; ~10 min
 npm run baselines    # 30/90-day price baselines from MTGJSON (run after data; ~2 min)
 npm run eval         # accuracy on real card scans in simulated binder photos (after data)
 npm run smoke -- https://mtgdb.vercel.app   # upload a real-card binder video to a deployed site and check the results
+npm run sim          # simulate scanning a big binder (drifting pages, nudges, auto-exposure, resting hands) and report losses
 npm run dev          # local dev server (https is needed for the camera on a phone; see below)
 npm test             # unit + synthetic recognition tests
 npm run typecheck
@@ -119,6 +130,16 @@ printings:
 Most pockets to check are **Which printing?** flags. 1080p loses the border
 detail that separates some originals from reprints, so record in 4K and
 upload for the best results.
+
+Whole-binder runs, measured with `npm run sim` (real card scans, simulated
+pages drifting as the stacks change, nudges, auto-exposure, hands resting on
+the page):
+
+| Run | Before page tracking | Now |
+|---|---|---|
+| 16 spreads, pages drift 29% of a card width | 46% of cards right, 3 spreads missed | 287/288 right, none wrong |
+| 24 spreads, thick binder, drift 73% of a card width | not run | 429/432 right; the 3 misses flagged orange |
+| 16 spreads, fast flipping (0.5–0.9 s pauses) | not run | 286/288 right |
 
 - These are simulated photos. Real glare, sleeve scratches, curled pages and
   autofocus will be harder, so the thresholds in `DEFAULT_RECOGNIZE` and

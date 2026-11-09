@@ -16,7 +16,8 @@
     "eval": "NODE_USE_ENV_PROXY=1 tsx scripts/eval-real.ts",
     "baselines": "NODE_USE_ENV_PROXY=1 tsx scripts/build-baselines.ts",
     "build:full": "npm run data && (npm run baselines || echo 'Price baselines skipped; the app falls back to its own price history') && npm run build",
-    "smoke": "NODE_USE_ENV_PROXY=1 tsx scripts/smoke-live.ts"
+    "smoke": "NODE_USE_ENV_PROXY=1 tsx scripts/smoke-live.ts",
+    "sim": "NODE_USE_ENV_PROXY=1 tsx scripts/sim-binder.ts"
   },
   "dependencies": {
     "@tesseract.js-data/eng": "^1.0.0",

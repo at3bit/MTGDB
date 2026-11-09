@@ -11,6 +11,7 @@ interface Props {
   pagesPerSpread: number;
   live: LivePrices;
   ocrPending: number;
+  runStats: { captures: number; repeats: number; reread: number };
   onUpdate: (spreadId: number, pocket: PocketView) => void;
   onReadName: (spreadId: number, pocket: PocketView) => void;
   onSave: () => void;
@@ -19,7 +20,7 @@ interface Props {
 
 const STATUS_LABEL = { matched: '', uncertain: 'Check', unknown: '?', empty: 'Empty' };
 
-export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, ocrPending, onUpdate, onReadName, onSave, onDiscard }: Props) {
+export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, ocrPending, runStats, onUpdate, onReadName, onSave, onDiscard }: Props) {
   const [open, setOpen] = useState<{ spread: number; page: number; slot: number } | null>(null);
   const total = spreads.reduce((t, s) => t + spreadTotal(db, s, live), 0);
   const counts = useMemo(() => {
@@ -44,6 +45,14 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, ocrPen
             </div>
           </div>
         </div>
+        {runStats.captures > 0 && (
+          <div className="muted small" style={{ marginTop: 6 }} data-testid="run-stats">
+            {spreads.length} spread{spreads.length === 1 ? '' : 's'} ({spreads.length * pagesPerSpread} pages) from {runStats.captures} capture{runStats.captures === 1 ? '' : 's'}
+            {runStats.repeats > 0 && ` · ${runStats.repeats} repeat${runStats.repeats === 1 ? '' : 's'} merged`}
+            {runStats.reread > 0 && ` · ${runStats.reread} page${runStats.reread === 1 ? '' : 's'} re-read`}
+            . Fewer pages than your binder has? Pause about half a second on each spread.
+          </div>
+        )}
         {ocrPending > 0 && <div className="muted small" style={{ marginTop: 6 }}>Reading card names for {ocrPending} pocket{ocrPending === 1 ? '' : 's'}…</div>}
       </div>
       {spreads.length === 0 && (

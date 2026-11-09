@@ -33,6 +33,8 @@ export function App() {
   const [spreads, setSpreads] = useState<Spread[]>([]);
   const [pagesPerSpread, setPagesPerSpread] = useState(2);
   const [ocrPending, setOcrPending] = useState(0);
+  /** What happened during the last run, shown on the review screen. */
+  const [runStats, setRunStats] = useState({ captures: 0, repeats: 0, reread: 0 });
   const [refreshing, setRefreshing] = useState<string | null>(null);
   const recognizer = useRef<Recognizer | null>(null);
   const spreadsRef = useRef<Spread[]>([]);
@@ -101,13 +103,15 @@ export function App() {
   );
 
   const onSpread = useCallback(
-    (r: { pockets: WirePocket[]; time: number }, pps: number) => {
+    (r: { pockets: WirePocket[]; time: number; retried?: number[] }, pps: number) => {
       if (!db) return;
       setPagesPerSpread(pps);
       const pockets: KeyedPocket[] = r.pockets.map((p) => ({ ...toPocketView(p, db), key: ++pocketKeys }));
       const prev = spreadsRef.current;
       const last = prev[prev.length - 1];
-      if (last && sameSpread(last.pockets, pockets, db)) {
+      const repeat = !!last && sameSpread(last.pockets, pockets, db);
+      setRunStats((s) => ({ captures: s.captures + 1, repeats: s.repeats + (repeat ? 1 : 0), reread: s.reread + (r.retried?.length ?? 0) }));
+      if (repeat) {
         commitSpreads([...prev.slice(0, -1), { ...last, pockets: mergeInto(last.pockets, pockets) }]);
       } else {
         commitSpreads([...prev, { id: nextSpreadId.current++, time: r.time, pockets }]);
@@ -179,6 +183,7 @@ export function App() {
           onBack={() => setScreen({ name: 'home' })}
           onStart={(binder, source) => {
             commitSpreads([]);
+            setRunStats({ captures: 0, repeats: 0, reread: 0 });
             setScreen({ name: 'scan', binder, source });
           }}
         />
@@ -202,6 +207,7 @@ export function App() {
           pagesPerSpread={pagesPerSpread}
           live={live}
           ocrPending={ocrPending}
+          runStats={runStats}
           onUpdate={updatePocket}
           onReadName={(_, p) => p.nameCrop && runOcr((p as KeyedPocket).key, p.nameCrop)}
           onSave={() => saveBinder(screen.binder)}

@@ -4,8 +4,8 @@
 import { SpreadWatcher } from '../core/motion.ts';
 import { calibrationBounds, type Calibration } from '../core/geometry.ts';
 import { FrameReader, type FrameSource } from './capture.ts';
-import type { Recognizer } from './data.ts';
-import type { WireImage, WirePocket } from './protocol.ts';
+import type { Recognizer, SpreadReading } from './data.ts';
+import type { WireImage } from './protocol.ts';
 
 export interface RunStatus {
   phase: 'watching' | 'moving' | 'settled' | 'finishing' | 'done';
@@ -19,7 +19,7 @@ export interface RunStatus {
 
 export interface RunEvents {
   status(s: RunStatus): void;
-  spread(r: { pockets: WirePocket[]; ms: number; time: number }): void;
+  spread(r: SpreadReading & { time: number }): void;
   error(e: Error): void;
 }
 
@@ -44,6 +44,7 @@ export class RunController {
 
   async run(): Promise<void> {
     this.running = true;
+    const runId = Date.now();
     const bounds = calibrationBounds(this.cal);
     const jobs: Promise<void>[] = [];
     let pending: { frames: WireImage[]; time: number } | null = null;
@@ -55,7 +56,7 @@ export class RunController {
       this.captured++;
       jobs.push(
         this.rec
-          .recognize(p.frames, this.cal)
+          .recognize(p.frames, this.cal, runId)
           .then((r) => this.on.spread({ ...r, time: p.time }))
           .catch((e) => this.on.error(e)),
       );
