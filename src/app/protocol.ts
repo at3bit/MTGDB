@@ -22,7 +22,9 @@ export interface WirePocket {
   otherNameDistance: number;
   sharpness: number;
   glare: number;
-  thumb: WireImage;
+  /** Review photo: a JPEG file when the worker could encode one, else raw pixels. */
+  thumb?: WireImage;
+  thumbJpeg?: Blob;
   nameCrop?: WireImage;
   query?: number[];
   borderLuma?: number;

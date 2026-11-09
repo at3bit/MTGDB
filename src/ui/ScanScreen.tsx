@@ -2,6 +2,7 @@
 // can pause to re-line-up the outline (the page stacks shift as you go),
 // and snap pages by hand.
 import { useEffect, useRef, useState } from 'react';
+import { diagnostics } from '../app/diagnostics.ts';
 import { defaultCalibration, type Calibration, type Rotation } from '../core/geometry.ts';
 import { keepAwake, openCamera, openVideoFile, type FrameSource } from '../app/capture.ts';
 import { RunController, type CaptureMode, type RunStatus } from '../app/run.ts';
@@ -169,6 +170,14 @@ export function ScanScreen({ binder, source, recognizer, spreadsSoFar, onSpread,
     if (!cal || !srcRef.current) return;
     await saveCalibration({ calibration: cal, rotation, frameW: dims.w, frameH: dims.h });
     const pagesPerSpread = cal.pages.length;
+    const v = videoRef.current!;
+    diagnostics.startRun({
+      source: isFile ? { kind: 'file', name: (source as File).name, type: (source as File).type, bytes: (source as File).size, duration: v.duration } : { kind: 'camera' },
+      video: `${dims.w}x${dims.h}`,
+      outline: cal,
+      rotation,
+      mode,
+    });
     clickRef.current = makeClick(); // created on the tap so Safari allows sound
     const release = await keepAwake();
     const ctrl = new RunController(
@@ -177,6 +186,7 @@ export function ScanScreen({ binder, source, recognizer, spreadsSoFar, onSpread,
       recognizer,
       {
         status: setStatus,
+        sent: (f) => diagnostics.addFrames(f),
         captured: () => {
           if (soundRef.current) clickRef.current();
           setFlash((n) => n + 1);
@@ -219,7 +229,8 @@ export function ScanScreen({ binder, source, recognizer, spreadsSoFar, onSpread,
     ctrlRef.current?.stop();
   };
 
-  const lowRes = dims.w * dims.h > 0 && Math.max(dims.w, dims.h) < 1920 && phase !== 'opening';
+  // Below 4K a card's name is under ~20 px tall: names and set symbols get hard to read.
+  const lowRes = dims.w * dims.h > 0 && Math.max(dims.w, dims.h) < 3000 && phase !== 'opening';
   const editable = phase === 'calibrate' || phase === 'paused';
 
   return (
@@ -283,8 +294,14 @@ export function ScanScreen({ binder, source, recognizer, spreadsSoFar, onSpread,
           </div>
           <p className="muted small" style={{ margin: 0 }}>
             {dims.w}×{dims.h} {isFile ? 'video' : 'camera'}
-            {lowRes && ' — low resolution; record in 4K for best results (Settings › Camera › Record Video).'}
           </p>
+          {lowRes && (
+            <div className="notice small" style={{ margin: 0 }}>
+              {isFile
+                ? `This video is ${Math.min(dims.w, dims.h)}p. At this size card names and set symbols are only a few pixels tall, so more cards will need checking. For the best results record in 4K: Settings › Camera › Record Video › 4K at 30 fps.`
+                : `The camera is giving ${dims.w}×${dims.h} here. For the sharpest results, record the run in 4K with the Camera app (with focus locked) and upload the video instead.`}
+            </div>
+          )}
           <button className="btn primary block" onClick={start}>
             {isFile ? 'Process video' : 'Start run'}
           </button>

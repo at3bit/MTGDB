@@ -15,17 +15,21 @@ link. Each person's collection is stored only on their own phone.
 
 ## How recognition works
 
-1. **Page-turn detection** (`src/core/motion.ts`). The app samples the video
-   15 times a second (an uploaded video is stepped through frame by frame at
-   that rate, never played fast) and compares small thumbnails, adjusted for brightness so
-   the camera's auto-exposure settling after a turn doesn't count as movement. When the view has been still
-   for a moment after movement, it captures that spread. Every settled view is
-   captured, and repeat captures of the same spread (a hand passed over, or
-   rested on the page and lifted) are merged by card name, keeping the better
-   reading of each pocket. When pages are flipped quickly, the page may never
-   be still long enough to settle, so the stillest moment of each pause is kept
-   and captured if the next turn starts first; such a capture is dropped if it
-   turns out to have caught the page mid-turn (almost nothing matches).
+1. **Page-turn detection and capture** (`src/core/motion.ts`, `src/core/capture.ts`,
+   `src/core/focus.ts`). The app samples the video 15 times a second (an
+   uploaded video is stepped through frame by frame at that rate, never played
+   fast) and compares small thumbnails, adjusted for brightness so the camera's
+   auto-exposure settling after a turn doesn't count as movement. While the page
+   is still it also measures **focus** on small full-resolution patches of each
+   page, because the camera refocuses after every turn and the page-turn
+   detector can't see that (a refocus looks like a still page). It keeps the
+   sharpest frame of each page and sends the spread when the next turn starts
+   (uploads) or once focus stops improving (live camera, 0.25–1.5 s). Repeat
+   captures of the same spread (a hand passed over, or rested on the page and
+   lifted) are merged by card name, keeping the better reading of each pocket.
+   When pages are flipped quickly and never settle, the sharpest frame of the
+   pause is captured instead, and dropped if it caught the page mid-turn
+   (almost nothing matches).
 2. **Page tracking** (`src/core/align.ts`, `src/core/scan.ts`). You line up
    an outline over the pages once, but in a thick binder the pages don't stay
    put: the page stacks change height as you turn (pages get bigger or smaller
@@ -35,8 +39,13 @@ link. Each person's collection is stored only on their own phone.
    the previous spread. A page where most cards read badly is re-read from
    other placements.
 3. **Pocket extraction** (`src/core/geometry.ts`, `src/core/recognize.ts`). Each pocket is
-   perspective-corrected into a straight card image. When two frames of a spread
-   are captured, the app keeps the sharper, less glary crop of each pocket.
+   perspective-corrected into a straight card image. When a spread comes with two
+   frames (each page sharpest in a different one), the app keeps the sharper,
+   less glary crop of each pocket. A pocket with little fine detail is only
+   called empty if it also doesn't match a card: blur removes detail too, and
+   the fingerprint still matches cards far blurrier than that (pages read from
+   a blurry photo are flagged in the review). The review photo of each pocket
+   is cut straight from the full-resolution frame.
 4. **Image match** (`src/core/fingerprint.ts`). Each card gets a 160-bit visual
    fingerprint: the whole card's structure, the art box's structure, and the
    colour layout. It's compared against the fingerprints of every paper printing
@@ -82,6 +91,9 @@ link. Each person's collection is stored only on their own phone.
   can be the shutter. A click sound and a green flash confirm each capture.
 - **Pause & adjust**: as the page stacks shift, pause, drag the outline onto
   the pages as they sit now, and continue. Page tracking restarts from it.
+- **Share scan diagnostics** (review screen): a zip of the photos the app
+  captured (the last 30, up to 2560 px) and what it read from each, to send
+  when a scan comes out wrong. Nothing leaves the phone until you share it.
 - If the video stops responding part-way (Safari now and then drops a seek;
   each is retried) or the card reader crashes (it restarts), the scan says so
   and keeps everything captured up to then, rather than freezing.
@@ -193,6 +205,25 @@ settle-only rule):
 | 0.5–0.9 s | 90% | 99% |
 | 0.2–0.45 s | 56% | 97%, all 16 spreads |
 | 0.15–0.3 s | 55% | 84–96% |
+
+Blur (`npm run eval -- --defocus 2`, `npm run sim -- --refocus 0.5`): real
+cards in simulated 4K frames, defocused by a Gaussian of N% of a card's width.
+Before, a blurry card was taken for an empty sleeve:
+
+| Defocus | Before (detail test only) | Now |
+|---|---|---|
+| 1% | 96% of cards | 96% |
+| 2% | 38% | 97% |
+| 3% | 0% | 96% |
+
+Whole binders where the camera refocuses after each turn (blurry for the
+first part of every pause), before -> now:
+
+| Run | Before | Now |
+|---|---|---|
+| 0.5 s refocus, relaxed pace | 86% found; 17 of 26 captures out of focus | 100%; 2 of 26 |
+| 0.8 s refocus, 0.5–0.9 s pauses | 49% found, 17 wrong shown green | 99%, none wrong |
+| 0.5 s refocus, 0.2–0.45 s pauses | 56% | 95% |
 
 Binders with empty sleeves (`npm run sim -- --empty 0.3` / `0.6`), where
 empty sleeves show card backs or the next sheet's card:

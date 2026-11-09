@@ -58,6 +58,19 @@ export interface Spread {
   pockets: PocketView[];
 }
 
+/** Object URLs of review photos, released when a scan is discarded or replaced (releasePhotos). */
+const photoUrls: string[] = [];
+function photoUrl(blob: Blob): string {
+  const url = URL.createObjectURL(blob);
+  photoUrls.push(url);
+  return url;
+}
+
+/** Frees the review photos of the current scan (call when starting a new scan or leaving the review). */
+export function releasePhotos() {
+  for (const url of photoUrls.splice(0)) URL.revokeObjectURL(url);
+}
+
 export function toPocketView(p: WirePocket, db: CardDB): PocketView {
   const chosen = p.status === 'empty' || !p.matches.length || p.status === 'unknown' ? null : p.matches[0].card;
   return settlePrinting(
@@ -67,7 +80,7 @@ export function toPocketView(p: WirePocket, db: CardDB): PocketView {
       status: p.status,
       matches: p.matches,
       otherNameDistance: p.otherNameDistance,
-      thumbUrl: imageToDataURL(p.thumb),
+      thumbUrl: p.thumbJpeg ? photoUrl(p.thumbJpeg) : p.thumb ? imageToDataURL(p.thumb) : '',
       query: p.query ? Uint32Array.from(p.query) : undefined,
       nameCrop: p.nameCrop,
       chosen,

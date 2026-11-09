@@ -48,14 +48,32 @@ export function SetupScreen({ collection, onStart, onBack }: Props) {
         />
       </div>
       <div className="card">
-        <h2>For the best results</h2>
-        <ul className="tips">
-          <li>Light from two sides (or soft, diffused light) to keep glare off the pocket plastic.</li>
-          <li>Hold the phone parallel to the table, about 50 cm (20 in) up for an open binder.</li>
-          <li>For uploads, record in 4K: Settings › Camera › Record Video › 4K at 30 fps.</li>
-          <li>Keep the binder in the same spot; a strip of tape on the table helps.</li>
-          <li>Pause about a second on each spread. Your hand can stay out of frame between turns.</li>
-        </ul>
+        <h2>Before you record</h2>
+        <p className="muted small" style={{ marginTop: 0 }}>Most misread cards come from blurry photos. These settings fix most of that.</p>
+        <ol className="tips checklist">
+          <li>
+            <strong>Settings › Camera › Record Video:</strong> choose <strong>4K at 30 fps</strong>, turn <strong>HDR Video</strong> off, and
+            turn <strong>Lock Camera</strong> on (so the phone doesn’t switch lenses mid-run). Turn Auto FPS off if you see it.
+          </li>
+          <li>
+            <strong>Lock focus:</strong> in the Camera app, frame the open binder, then press and hold on the cards until
+            <strong> AE/AF LOCK</strong> appears. Then start recording.
+          </li>
+          <li>
+            <strong>Height:</strong> phone flat, about 50 cm (20 in) above the table. If one page comes out soft, raise the phone a little:
+            the two halves of a thick binder sit at different heights.
+          </li>
+          <li>
+            <strong>Light:</strong> bright and even, from two sides (or diffused), to avoid glare and slow, blurry exposures.
+          </li>
+          <li>
+            <strong>Pace:</strong> pause about half a second on each spread and keep your hand out of frame between turns. Keep the binder in
+            one spot (a strip of tape helps).
+          </li>
+        </ol>
+        <p className="muted small" style={{ marginBottom: 0 }}>
+          This app can’t lock the live camera’s focus, so a video recorded this way and uploaded gives the sharpest results.
+        </p>
       </div>
     </div>
   );

@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { diagnostics } from '../app/diagnostics.ts';
 import type { CardDB } from '../core/carddb.ts';
 import { loadBaselines, loadCardDB, MissingDataError, Recognizer } from '../app/data.ts';
 import type { Baselines } from '../core/baselines.ts';
-import { addReading, applyOcr, binderEntries, markGhosts, needsOcr, toPocketView, type LivePrices, type PocketView, type Spread } from '../app/session.ts';
+import { addReading, applyOcr, binderEntries, markGhosts, needsOcr, releasePhotos, toPocketView, type LivePrices, type PocketView, type Spread } from '../app/session.ts';
 import { loadCollection, loadHistory, loadLivePrices, recordPrices, saveCollection, saveLivePrices, type Collection, type OwnedCard, type PriceHistory } from '../app/store.ts';
 import { fetchLivePrices } from '../app/prices.ts';
 import type { WirePocket } from '../app/protocol.ts';
+import type { Calibration } from '../core/geometry.ts';
 import { HomeScreen } from './HomeScreen.tsx';
 import { SetupScreen } from './SetupScreen.tsx';
 import { ScanScreen } from './ScanScreen.tsx';
@@ -105,9 +107,10 @@ export function App() {
   );
 
   const onSpread = useCallback(
-    (r: { pockets: WirePocket[]; time: number; retried?: number[]; change?: number; manual?: boolean }, pps: number) => {
+    (r: { pockets: WirePocket[]; time: number; retried?: number[]; change?: number; manual?: boolean; ms?: number; calibration?: Calibration }, pps: number) => {
       if (!db) return;
       setPagesPerSpread(pps);
+      diagnostics.addReading(r, db);
       const pockets: KeyedPocket[] = r.pockets.map((p) => ({ ...toPocketView(p, db), key: ++pocketKeys }));
       const prev = spreadsRef.current;
       const next = addReading(prev, { pockets, time: r.time, change: r.change ?? Infinity, manual: !!r.manual }, pps, db);
@@ -139,6 +142,7 @@ export function App() {
     await saveCollection(next);
     setCollection(next);
     setHistory(await recordPrices(db, next, live));
+    releasePhotos();
     commitSpreads([]);
     setScreen({ name: 'binder', binder });
   };
@@ -182,6 +186,7 @@ export function App() {
           collection={collection}
           onBack={() => setScreen({ name: 'home' })}
           onStart={(binder, source) => {
+            releasePhotos();
             commitSpreads([]);
             setRunStats({ captures: 0, repeats: 0, reread: 0 });
             setScreen({ name: 'scan', binder, source });
@@ -215,7 +220,8 @@ export function App() {
           onSave={() => saveBinder(screen.binder)}
           onDiscard={() => {
             if (!spreads.length || confirm('Discard this scan?')) {
-              commitSpreads([]);
+              releasePhotos();
+            commitSpreads([]);
               setScreen({ name: 'home' });
             }
           }}

@@ -1,14 +1,15 @@
 // Turns captured frames of an open binder into per-pocket card matches.
 import { CARD_ASPECT, homography, applyH, pocketQuads, warpQuad, type Calibration, type Quad } from './geometry.ts';
-import { glareFraction, laplacianVariance, meanStd, resampleGray, resampleRGBA, toGray, type GrayImage, type RGBAImage, type Rect } from './image.ts';
+import { glareFraction, laplacianVariance, meanStd, resampleGray, toGray, type GrayImage, type RGBAImage, type Rect } from './image.ts';
 import { fingerprint, fpDistance, REGION, type Match } from './fingerprint.ts';
 import { SYMBOL_H, SYMBOL_REGION, SYMBOL_W } from './symbol.ts';
 
 /** Pocket crops are warped to this size (card aspect, including the expansion margin). */
 export const POCKET_W = 264;
 export const POCKET_H = Math.round(POCKET_W / CARD_ASPECT);
-export const THUMB_W = 146;
-export const THUMB_H = 204;
+/** Review photo of each pocket: cut straight from the frame, at most this size (never upscaled past the frame's own pixels). */
+export const THUMB_W = 288;
+export const THUMB_H = 402;
 /** OCR crop of the title line. */
 export const NAME_W = 480;
 export const NAME_H = 52;
@@ -219,7 +220,17 @@ function mapRect(H: Float64Array, r: Rect): Quad {
 export function recognizePocket(pc: PocketCrop, idx: MatchIndex, cfg: RecognizeConfig = DEFAULT_RECOGNIZE): PocketResult {
   const nominal = nominalWindow(cfg);
   const detail = laplacianVariance(grayRect(pc.gray, nominal, 48, 67));
-  const thumbOf = (r: Rect) => resampleRGBA(pc.crop, r, THUMB_W, THUMB_H);
+  // Pocket-crop coordinates -> frame coordinates, for crops taken straight from the full-resolution frame.
+  const H = homography(
+    [{ x: 0, y: 0 }, { x: POCKET_W, y: 0 }, { x: POCKET_W, y: POCKET_H }, { x: 0, y: POCKET_H }],
+    pc.quad,
+  );
+  const thumbOf = (r: Rect) => {
+    const q = mapRect(H, r);
+    const native = Math.hypot(q[1].x - q[0].x, q[1].y - q[0].y);
+    const w = Math.max(96, Math.min(THUMB_W, Math.round(native)));
+    return warpQuad(pc.frame, q, w, Math.round((w * THUMB_H) / THUMB_W));
+  };
   const lowDetail = detail < cfg.emptyDetail;
   const empty = (): PocketResult => ({ page: pc.page, slot: pc.slot, status: 'empty', matches: [], otherNameDistance: Infinity, sharpness: pc.sharpness, glare: pc.glare, thumb: thumbOf(nominal) });
   if (lowDetail && !cfg.matchLowDetail) return empty();
@@ -255,10 +266,6 @@ export function recognizePocket(pc: PocketCrop, idx: MatchIndex, cfg: RecognizeC
   else if (best && best.d <= cfg.maybeDistance) status = 'uncertain';
 
   // Crops from the full-resolution frame (sharper than the pocket crop): the title line for OCR, the set symbol for printings.
-  const H = homography(
-    [{ x: 0, y: 0 }, { x: POCKET_W, y: 0 }, { x: POCKET_W, y: POCKET_H }, { x: 0, y: POCKET_H }],
-    pc.quad,
-  );
   const regionOf = (r: readonly [number, number, number, number]): Rect => ({ x: bestWindow.x + bestWindow.w * r[0], y: bestWindow.y + bestWindow.h * r[1], w: bestWindow.w * (r[2] - r[0]), h: bestWindow.h * (r[3] - r[1]) });
   let nameCrop: RGBAImage | undefined;
   if (status !== 'matched') nameCrop = warpQuad(pc.frame, mapRect(H, regionOf(REGION.name)), NAME_W, NAME_H);

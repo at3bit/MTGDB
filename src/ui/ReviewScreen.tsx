@@ -1,6 +1,7 @@
 // Results of a run: every spread, page by page (or as a sortable, searchable
 // list / gallery), with a fix-up sheet per pocket.
 import { useMemo, useState } from 'react';
+import { diagnostics, shareDiagnostics } from '../app/diagnostics.ts';
 import { formatUSD, type CardDB, type Finish } from '../core/carddb.ts';
 import type { Baselines } from '../core/baselines.ts';
 import { binderEntries, needsCheck, pocketPrice, rankPrintings, spreadTotal, type LivePrices, type PocketView, type Spread } from '../app/session.ts';
@@ -58,6 +59,7 @@ function pocketClass(p: PocketView): string {
 }
 
 export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, history, baselines, ocrPending, runStats, onUpdate, onReadName, onSave, onDiscard }: Props) {
+  const [sharing, setSharing] = useState(false);
   const [open, setOpen] = useState<{ spread: number; page: number; slot: number } | null>(null);
   // What saving would store: one entry per printing, without see-through cards and card backs.
   const entries = useMemo(() => binderEntries(spreads, pagesPerSpread, db), [spreads, pagesPerSpread, db]);
@@ -114,6 +116,9 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
           {Array.from({ length: pagesPerSpread }, (_, page) => (
             <div key={page}>
               <div className="page-label">{pageName(si, page)}</div>
+              {s.pockets.filter((p) => p.page === page && p.blurry && !p.ghost).length >= 3 && (
+                <div className="blurry-note">Blurry photo: check these cards, or scan this page again with focus locked.</div>
+              )}
               <div className="page-grid">
                 {s.pockets
                   .filter((p) => p.page === page)
@@ -160,6 +165,27 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
           </div>
         )}
         {ocrPending > 0 && <div className="muted small" style={{ marginTop: 6 }}>Reading card names for {ocrPending} pocket{ocrPending === 1 ? '' : 's'}… wait for this before saving.</div>}
+        {diagnostics.hasRun && (
+          <div className="row small" style={{ marginTop: 8, gap: 8, flexWrap: 'wrap' }}>
+            <span className="muted">Scan look wrong?</span>
+            <button
+              className="btn small"
+              disabled={sharing}
+              onClick={async () => {
+                setSharing(true);
+                try {
+                  await shareDiagnostics();
+                } catch (e) {
+                  alert(`Couldn’t share the diagnostics: ${(e as Error).message}`);
+                } finally {
+                  setSharing(false);
+                }
+              }}
+            >
+              {sharing ? 'Packing…' : 'Share scan diagnostics'}
+            </button>
+          </div>
+        )}
       </div>
       {spreads.length === 0 ? (
         <div className="notice">No spreads were captured. Make sure the outline matches the pages and that each spread is held still for about half a second.</div>

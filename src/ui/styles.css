@@ -77,6 +77,8 @@ label.field > span { display: block; font-size: 13px; color: var(--muted); margi
 .notice.error { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 8%, var(--surface)); }
 .tips { margin: 0; padding-left: 18px; color: var(--muted); }
 .tips li + li { margin-top: 4px; }
+.tips.checklist li + li { margin-top: 8px; }
+.tips.checklist strong { color: var(--text); }
 
 /* Camera stage */
 .stage-wrap { display: flex; justify-content: center; margin: 0 -16px 12px; background: #000; }
@@ -136,6 +138,7 @@ label.field > span { display: block; font-size: 13px; color: var(--muted); margi
 .card-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
 @media (min-width: 640px) { .card-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
 .tile .badge { margin-top: 2px; font-size: 11px; padding: 1px 6px; }
+.blurry-note { font-size: 12px; color: var(--warn); margin: -2px 0 6px; }
 .tile.ghost { opacity: 0.35; border-style: dashed; border-color: var(--line); }
 
 /* Set-symbol zoom (photo crop and each printing's symbol area) */

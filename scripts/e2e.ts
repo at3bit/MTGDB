@@ -16,6 +16,7 @@ import { encodeFingerprints, type CardsFile } from '../src/core/carddb.ts';
 import { makeCard, renderSpread, rng, toReferenceSize, SCENE_PAGES } from '../tests/synth.ts';
 import type { RGBAImage } from '../src/core/image.ts';
 import { writeDataVersion } from './data-version.ts';
+import { strFromU8, unzipSync } from 'fflate';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_PATH ?? 'playwright');
@@ -192,6 +193,22 @@ try {
   const expectedTotal = spreadIds.flat().filter((id) => id >= 0).reduce((t, id) => t + (file.cards[id][6] as number), 0);
   const shownTotal = await page.locator('.big-number').first().textContent();
   console.log(`  total shown ${shownTotal}, expected $${expectedTotal.toFixed(2)} if all correct`);
+
+  // Review photos are cut straight from the frame (not the old 146-px thumbnails), as compact JPEG files.
+  await page.waitForFunction(() => [...document.querySelectorAll('.tile img')].every((i) => (i as HTMLImageElement).complete));
+  const photo = await page.locator('.tile img').first().evaluate((img: HTMLImageElement) => ({ w: img.naturalWidth, url: img.src.slice(0, 5) }));
+  check(photo.w > 146 && photo.url === 'blob:', `review photos cut from the frame: ${photo.w} px wide (was 146), ${photo.url} URLs`);
+  // Diagnostics: the captured photos and readings, as a zip.
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Share scan diagnostics' }).click()]);
+  const zipPath = join(out, 'diagnostics.zip');
+  await download.saveAs(zipPath);
+  const zipped = unzipSync(readFileSync(zipPath));
+  const manifest = JSON.parse(strFromU8(zipped['manifest.json']));
+  const photos = Object.keys(zipped).filter((n) => n.endsWith('.jpg'));
+  check(
+    photos.length >= 3 && manifest.readings.length >= 3 && manifest.info.video === '1280x720' && manifest.frames.every((f: { focus: number[] }) => f.focus.length === 2),
+    `diagnostics zip: ${photos.length} photos, ${manifest.readings.length} readings, video ${manifest.info.video}, focus per page recorded`,
+  );
 
   // Open a pocket, then save.
   await page.locator('.tile').nth(1).click();
