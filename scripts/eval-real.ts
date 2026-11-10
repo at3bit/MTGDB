@@ -64,12 +64,14 @@ console.log(`index: ${db.count.toLocaleString()} printings, ${db.names.length.to
 
 // ---- sample cards: half uniform, half worth >= $5
 const r = rng(SEED);
-const valuable = Array.from({ length: db.count }, (_, i) => i).filter((i) => (file.cards[i][6] ?? 0) >= 5);
+// Cards in the binder are English; the app matches English printings only unless --all-languages.
+db.setEnglishOnly(!process.argv.includes('--all-languages'));
+const valuable = Array.from({ length: db.count }, (_, i) => i).filter((i) => (file.cards[i][6] ?? 0) >= 5 && !db.foreign[i]);
 const picks: number[] = [];
 while (picks.length < SPREADS * 18) {
   const pool = picks.length % 2 === 0 ? null : valuable;
   const i = pool ? pool[Math.floor(r() * pool.length)] : Math.floor(r() * db.count);
-  if (!picks.includes(i)) picks.push(i);
+  if (!picks.includes(i) && !db.foreign[i]) picks.push(i);
 }
 
 async function download(i: number): Promise<RGBAImage> {
@@ -117,7 +119,7 @@ const conditions: { name: string; opts: Omit<RenderOptions, 'seed'> }[] = [
   { name: '1080p live camera, even lighting', opts: { width: 1920, height: 1080, noise: 3, blur: true, haze: 0.1, jitter: 0.015, calibError: 0.002 } },
 ];
 
-interface Tally { symbolDefaultRight: number; symbolTried: number; symbolSettled: number; symbolSettledRight: number; symbolBestRight: number; toReview: number; flagged: number; hiddenError: number; valueError: number; printingMisses: { text: string; price: number }[]; pockets: number; imgMatched: number; imgMatchedWrongName: number; uncertain: number; unknown: number; nameRight: number; printingRight: number; confidentWrong: number; trueValue: number; foundValue: number; failures: string[] }
+interface Tally { falseAlarms: number; caught: number; confirmed: number; symbolDefaultRight: number; symbolTried: number; symbolSettled: number; symbolSettledRight: number; symbolBestRight: number; toReview: number; flagged: number; hiddenError: number; valueError: number; printingMisses: { text: string; price: number }[]; pockets: number; imgMatched: number; imgMatchedWrongName: number; uncertain: number; unknown: number; nameRight: number; printingRight: number; confidentWrong: number; trueValue: number; foundValue: number; failures: string[] }
 const results: Record<string, Tally> = {};
 const label = (i: number) => `${file.cards[i][1]} (${file.cards[i][2].toUpperCase()} #${file.cards[i][3]})`;
 
@@ -127,7 +129,7 @@ for (const [ci, cond] of conditions.entries()) {
   const cardPx = (cond.opts.width * 0.41) / 3;
   if (DEFOCUS) cond.opts = { ...cond.opts, defocus: (DEFOCUS / 100) * cardPx };
   if (MOTION) cond.opts = { ...cond.opts, motion: (MOTION / 100) * cardPx };
-  const t: Tally = { symbolDefaultRight: 0, symbolTried: 0, symbolSettled: 0, symbolSettledRight: 0, symbolBestRight: 0, toReview: 0, flagged: 0, hiddenError: 0, valueError: 0, printingMisses: [], pockets: 0, imgMatched: 0, imgMatchedWrongName: 0, uncertain: 0, unknown: 0, nameRight: 0, printingRight: 0, confidentWrong: 0, trueValue: 0, foundValue: 0, failures: [] };
+  const t: Tally = { falseAlarms: 0, caught: 0, confirmed: 0, symbolDefaultRight: 0, symbolTried: 0, symbolSettled: 0, symbolSettledRight: 0, symbolBestRight: 0, toReview: 0, flagged: 0, hiddenError: 0, valueError: 0, printingMisses: [], pockets: 0, imgMatched: 0, imgMatchedWrongName: 0, uncertain: 0, unknown: 0, nameRight: 0, printingRight: 0, confidentWrong: 0, trueValue: 0, foundValue: 0, failures: [] };
   const t0 = Date.now();
   for (let s = 0; s < SPREADS; s++) {
     const ids = picks.slice(s * 18, s * 18 + 18);
@@ -136,7 +138,7 @@ for (const [ci, cond] of conditions.entries()) {
     const jpg = await sharp(Buffer.from(scene.frame.data.buffer), { raw: { width: scene.frame.width, height: scene.frame.height, channels: 4 } }).jpeg({ quality: 82 }).toBuffer();
     const dec = await sharp(jpg).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
     const frame: RGBAImage = { width: dec.info.width, height: dec.info.height, data: new Uint8ClampedArray(dec.data.buffer, dec.data.byteOffset, dec.data.byteLength) };
-    const res: PocketResult[] = recognizeSpread([frame], scene.calibration, { fps: db.fps, count: db.count, nameOf: db.nameOf }, { ...DEFAULT_RECOGNIZE, ...(Number.isFinite(EMPTY_DETAIL) ? { emptyDetail: EMPTY_DETAIL } : {}), matchLowDetail: !process.argv.includes('--old-empty') });
+    const res: PocketResult[] = recognizeSpread([frame], scene.calibration, { fps: db.fps, count: db.count, nameOf: db.nameOf, allowed: db.allowed }, { ...DEFAULT_RECOGNIZE, ...(Number.isFinite(EMPTY_DETAIL) ? { emptyDetail: EMPTY_DETAIL } : {}), matchLowDetail: !process.argv.includes('--old-empty'), nameCropAll: true });
     const emptyCount = res.filter((p) => p.status === 'empty').length;
     if (emptyCount) console.log(`  spread ${s + 1}: ${emptyCount} of 18 real cards taken for empty sleeves`);
     for (const p of res) {
@@ -148,8 +150,12 @@ for (const [ci, cond] of conditions.entries()) {
       if (p.status === 'unknown') t.unknown++;
       // Full pipeline: OCR for anything the image match didn't settle.
       let view: PocketView = { page: p.page, slot: p.slot, status: p.status, matches: p.matches, otherNameDistance: p.otherNameDistance, thumbUrl: '', query: p.query, nameCrop: undefined, chosen: p.status === 'matched' || p.status === 'uncertain' ? p.matches[0]?.card ?? null : null, finish: 'nonfoil', via: 'image', glare: p.glare, borderLuma: p.borderLuma };
-      if (p.status !== 'matched' && p.status !== 'empty' && p.nameCrop) view = applyOcr(view, await readName(p.nameCrop), db);
-      else view = settlePrinting(view, db);
+      // As the app does: settle the printing, then read every card's name (a cross-check for matched cards).
+      view = settlePrinting(view, db);
+      const imageSaidRight = view.status === 'matched' && view.chosen !== null && db.nameOf[view.chosen] === db.nameOf[truth];
+      if (p.status !== 'empty' && p.nameCrop) view = applyOcr(view, await readName(p.nameCrop), db);
+      if (view.nameCheck === 'differs') { if (imageSaidRight) t.falseAlarms++; else t.caught++; }
+      if (view.nameCheck === 'agrees') t.confirmed++;
       // Settle look-alike printings by the set symbol, as the app does.
       if (USE_SYMBOL && view.printingCheck && view.ties && view.ties.length > 1 && p.symbolCrop) {
         const cands = await Promise.all(view.ties.slice(0, 6).map(async (card) => ({ card, image: await refImage(card) })));
@@ -198,6 +204,7 @@ for (const [ci, cond] of conditions.entries()) {
   t.failures.slice(0, 12).forEach((f) => console.log(`   ✗ ${f}`));
   console.log(`  value error (sum of |price picked - true price|): $${t.valueError.toFixed(2)} before review; $${t.hiddenError.toFixed(2)} hidden in pockets shown as identified`);
   console.log(`  pockets to check: ${t.toReview} of ${t.pockets} (${t.flagged} for "which printing?")`);
+  console.log(`  name cross-check: ${t.confirmed} confirmed; flagged ${t.caught} wrong image matches and ${t.falseAlarms} right ones (false alarms)`);
   if (USE_SYMBOL) console.log(`  set symbol: compared ${t.symbolTried} ties; first guess right without the symbol ${t.symbolDefaultRight}, with it ${t.symbolBestRight}; settled ${t.symbolSettled} automatically, ${t.symbolSettledRight} of them right`);
   t.printingMisses.sort((a, b) => b.price - a.price);
   t.printingMisses.slice(0, 15).forEach((f) => console.log(`   ~ ${f.text}`));

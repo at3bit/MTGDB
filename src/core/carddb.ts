@@ -26,6 +26,8 @@ export interface CardsFile {
   cards: CardRow[];
   /** Fingerprint (5 words) of the Magic card back, for spotting sleeves that show one. */
   back?: number[];
+  /** Non-English printings: language code -> card indices. Missing in older data (then everything counts as English). */
+  langs?: Record<string, number[]>;
 }
 
 export type Finish = 'nonfoil' | 'foil' | 'etched';
@@ -104,6 +106,10 @@ export class CardDB {
   /** names index -> card indices (printings) */
   readonly printings: number[][] = [];
   private readonly normNames: string[] = [];
+  /** 1 for printings not in English. */
+  readonly foreign: Uint8Array;
+  /** Printings the matcher may return (null = all). See setEnglishOnly. */
+  allowed: Uint8Array | null = null;
   private readonly gramIndex = new Map<string, number[]>();
 
   constructor(file: CardsFile, fps: { count: number; data: Uint32Array }) {
@@ -115,6 +121,8 @@ export class CardDB {
     this.count = fps.count;
     this.back = file.back?.length === FP_WORDS ? Uint32Array.from(file.back) : undefined;
     this.nameOf = new Int32Array(this.count);
+    this.foreign = new Uint8Array(this.count);
+    for (const list of Object.values(file.langs ?? {})) for (const i of list) if (i < this.count) this.foreign[i] = 1;
     const byName = new Map<string, number>();
     file.cards.forEach((row, i) => {
       const name = row[1];
@@ -187,6 +195,27 @@ export class CardDB {
     }
     scored.sort((a, b) => b.score - a.score);
     return scored.slice(0, limit);
+  }
+
+  /**
+   * Leave non-English printings out of matching and printing choices. Many share their art with an
+   * English printing, so a photo of an English card could otherwise come back as the foreign one.
+   */
+  setEnglishOnly(on: boolean) {
+    if (!on || !this.foreign.some((f) => f)) {
+      this.allowed = null;
+      return;
+    }
+    this.allowed = new Uint8Array(this.count);
+    for (let i = 0; i < this.count; i++) this.allowed[i] = this.foreign[i] ? 0 : 1;
+  }
+
+  /** Printings of a name that matching may use (all of them if none is allowed, e.g. a card only printed in Japanese). */
+  printingsOf(nameIdx: number): number[] {
+    const all = this.printings[nameIdx];
+    if (!this.allowed) return all;
+    const ok = all.filter((i) => this.allowed![i]);
+    return ok.length ? ok : all;
   }
 
   /** Typed search for the manual picker: prefix matches first, then substring matches. */

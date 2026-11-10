@@ -160,7 +160,7 @@ export class Recognizer {
     // The worker died (out of memory, or a crash): fail what it held and start a new one.
     worker.addEventListener('error', (e) => this.restart(`the card reader crashed${e.message ? ` (${e.message})` : ''}`));
     const db = this.db;
-    const msg: WorkerRequest = { type: 'init', fps: db.fps.slice(), count: db.count, nameOf: db.nameOf.slice(), back: db.back?.slice() };
+    const msg: WorkerRequest = { type: 'init', fps: db.fps.slice(), count: db.count, nameOf: db.nameOf.slice(), back: db.back?.slice(), allowed: db.allowed?.slice() ?? null };
     worker.postMessage(msg);
   }
 
@@ -200,6 +200,12 @@ export class Recognizer {
       const msg: WorkerRequest = { type: 'spread', job, runId, frames, calibration, tentative };
       this.worker.postMessage(msg, frames.map((f) => f.buffer));
     });
+  }
+
+  /** Follow the card database's allowed printings (after CardDB.setEnglishOnly). */
+  updateAllowed() {
+    const msg: WorkerRequest = { type: 'allowed', allowed: this.db.allowed?.slice() ?? null };
+    this.worker.postMessage(msg);
   }
 
   terminate() {

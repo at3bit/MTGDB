@@ -3,9 +3,11 @@
 A web app for iPhone that scans *Magic: The Gathering* binder pages and tracks
 what your collection is worth.
 
-Mount the phone on a tripod facing down at the table and open a 9-pocket binder
-under it. Then flip through the pages. The app spots each page turn, captures the
-open spread (18 pockets), identifies every card, and prices it in USD
+The most accurate way in: take a photo of each page (or open binder) with the
+iPhone Camera app and upload them all at once. You can also mount the phone on a
+tripod facing down at the table and flip through a 9-pocket binder on video or
+with the live camera (automatically, on a timer, or with a Snap button). The app
+captures each page or spread, identifies every card, and prices it in USD
 (TCGplayer market prices via Scryfall). It saves where each card lives (binder,
 page, slot) and flags cards trading well above their own recent average.
 
@@ -30,14 +32,16 @@ link. Each person's collection is stored only on their own phone.
    When pages are flipped quickly and never settle, the sharpest frame of the
    pause is captured instead, and dropped if it caught the page mid-turn
    (almost nothing matches).
-2. **Page tracking** (`src/core/align.ts`, `src/core/scan.ts`). You line up
-   an outline over the pages once, but in a thick binder the pages don't stay
-   put: the page stacks change height as you turn (pages get bigger or smaller
-   in the frame), and the binder gets nudged. On every spread the app re-finds
-   each page by matching the typical edge pattern of a card (border, name bar,
-   type line), measured from real scans, starting from where the page was on
-   the previous spread. A page where most cards read badly is re-read from
-   other placements.
+2. **The outline** (`src/ui/QuadOverlay.tsx`, `src/core/scan.ts`). One outline
+   with four corners, around the page, or around both pages of an open binder
+   with a handle for the gap at the spine. It stays where you put it: each
+   capture is read with it as it is. Only a page where some cards don't read is
+   also tried at nearby placements (re-found by the typical edge pattern of a
+   card, `src/core/align.ts`), and a placement is used only if it identifies at
+   least 2 more cards. The outline on screen never moves by itself; when a page
+   had to be found elsewhere the scan screen suggests Pause & adjust. (The page
+   finder used to move the outline on every capture; it nudged even a correct
+   outline by ~4% of a pocket, and real binders pulled it further.)
 3. **Pocket extraction** (`src/core/geometry.ts`, `src/core/recognize.ts`). Each pocket is
    perspective-corrected into a straight card image. When a spread comes with two
    frames (each page sharpest in a different one), the app keeps the sharper,
@@ -51,10 +55,15 @@ link. Each person's collection is stored only on their own phone.
    colour layout. It's compared against the fingerprints of every paper printing
    on Scryfall (~100k). Several slightly shifted placements are tried, since
    cards slide around in their pockets. A spread takes about half a second.
-5. **Name reading** (`src/app/ocr.ts`). When the image match isn't conclusive,
-   the app reads the title line with Tesseract (served by the app itself) and
-   fuzzy-matches it to card names. It then picks the closest-looking printing of
-   that name.
+5. **Name reading** (`src/app/ocr.ts`). Every card's title line is read with
+   Tesseract (served by the app itself) and fuzzy-matched to card names, as a
+   cross-check: when it agrees with the image match the card is confirmed;
+   when it clearly reads as a different card, the pocket is flagged and offers
+   both. For a card the image match didn't identify, a clean read identifies
+   it; a weak read is only offered as a suggestion. (On its own OCR reads 44% of
+   names at 1080p and ~80% even in 12 MP photos, so it checks the image match
+   rather than replacing it; whenever the two agreed in testing, they were
+   right.)
 6. **Printing.** Once the name is known, the app picks the printing from
    the closest look-alikes (`src/core/printing.ts`). It reads the printed
    border colour from the photo and checks it against Scryfall's
@@ -76,21 +85,34 @@ link. Each person's collection is stored only on their own phone.
    through sleeve". Repeat captures are judged per page, because see-through
    cards can make the right page look unchanged after a turn while the left
    page always changes.
-8. **Review.** Green pockets were identified. Orange means check it, red means
-   unknown. Tap any pocket to compare your photo with the match, switch
+8. **English only** (default; a checkbox on the scan setup screen). Scryfall
+   lists ~2,100 non-English printings, and 1,353 of them share their art with
+   an English printing, so a photo of an English card could come back as, say,
+   the Japanese one. Matching and printing choices skip them unless the box is
+   unticked.
+9. **Review.** Green pockets were identified. Orange means check it, red means
+   not identified (no guess is shown). A name the app isn't sure of is shown
+   as a question ("Lightning Bolt?") and isn't saved or counted until you
+   confirm it or pick the right card. Tap any pocket to compare your photo with the match, switch
    printing or foil, or search by name. Switch between the page-by-page
    gallery and a list, sort by price, 30-day gain or drop, name or set, and
    search by name.
 
 ## Scanning controls
 
-- **Capture pages automatically** (a quarter-second pause per spread is
-  enough; half a second is safer), or
-  **When I tap Snap**. Snap page also works in automatic mode, and Space,
-  Enter, → or Page Down snap too, so a Bluetooth page-turner pedal or remote
-  can be the shutter. A click sound and a green flash confirm each capture.
+- **Upload photos** (most accurate): pick all the photos at once, in page
+  order. Line up the outline on the first; with **Line up the outline on each
+  photo** (on by default, for photos taken by hand) the app stops on every
+  photo so you can adjust it, or skip the photo. A photo of a different shape
+  always stops for lining up.
+- **Live camera**: capture pages **Automatically** (a quarter-second pause per
+  spread is enough; half a second is safer), **On a timer** (a shot every 3-8 s
+  with a countdown, a click and a flash: turn the page after each), or **When I
+  tap Snap**. Snap page also works in automatic mode, and Space, Enter, → or
+  Page Down snap too, so a Bluetooth page-turner pedal or remote can be the
+  shutter.
 - **Pause & adjust**: as the page stacks shift, pause, drag the outline onto
-  the pages as they sit now, and continue. Page tracking restarts from it.
+  the pages as they sit now, and continue.
 - **Share scan diagnostics** (review screen): a zip of the photos the app
   captured (the last 30, up to 2560 px) and what it read from each, to send
   when a scan comes out wrong. Nothing leaves the phone until you share it.

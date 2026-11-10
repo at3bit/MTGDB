@@ -43,46 +43,63 @@ export interface TrackedSpread {
 }
 
 /**
- * Reads one spread. Pages are searched for near where they were on the
- * previous spread (`prev`), since they drift only a little per page turn, or
- * around the user's outline (`base`) for the first spread. A page where most
- * cards don't match well is re-read from other placements (the previous
- * spread's, wide searches around it and around the outline, and the outline
- * itself), keeping whichever reads best, so one bad fit doesn't
- * cost a page or derail the tracking.
+ * Reads one spread with the user's outline as it is: it's where the user put
+ * it, and moving it automatically did more harm than good on real binders
+ * (the page finder nudges even a correct outline, and sleeve seams, glare and
+ * binder rings can pull it a whole pocket off). Only a page that reads badly
+ * (most of its cards unidentified) is tried at other placements: found near
+ * the outline, near where that page read well last time (`prev`; pages can
+ * drift in a thick binder), and wider around both. A placement is used only
+ * if it identifies clearly more cards (at least 2 more). The calibration
+ * returned is where each page was read from; `retried` lists the pages that
+ * had to be moved, a sign the outline needs re-lining-up.
  */
+export interface TrackOptions {
+  /** Try other placements for a page when fewer than this fraction of its cards were identified. */
+  retryBelow: number;
+  /** A different placement is used only if it identifies at least this many more cards. */
+  minGain: number;
+  /** The old behaviour, for comparison: re-find the pages on every spread and follow them. */
+  follow?: boolean;
+}
+
+export const DEFAULT_TRACK: TrackOptions = { retryBelow: 1, minGain: 2 };
+
 export function recognizeTrackedSpread(
   frames: RGBAImage[],
   base: Calibration,
   prev: Calibration | undefined,
   idx: MatchIndex,
   cfg: RecognizeConfig = DEFAULT_RECOGNIZE,
+  opts: TrackOptions = DEFAULT_TRACK,
 ): TrackedSpread {
   const ref = frames[0];
   const usable = prev && prev.pages.length === base.pages.length ? prev : undefined;
-  const first = usable ? alignCalibration(ref, usable, NARROW_ALIGN).calibration : alignCalibration(ref, base, DEFAULT_ALIGN).calibration;
-  let pockets = recognizeSpread(frames, first, idx, cfg);
-  const pages: Quad[] = [...first.pages];
+  const start = opts.follow ? (usable ? alignCalibration(ref, usable, NARROW_ALIGN).calibration : alignCalibration(ref, base, DEFAULT_ALIGN).calibration) : base;
+  let pockets = recognizeSpread(frames, start, idx, cfg);
+  const pages: Quad[] = [...start.pages];
   const retried: number[] = [];
+  let narrowFromBase: Calibration | undefined;
   let wideFromBase: Calibration | undefined;
-  let wideFromPrev: Calibration | undefined;
+  let narrowFromPrev: Calibration | undefined;
   for (let p = 0; p < pages.length; p++) {
     const mine = pockets.filter((x) => x.page === p);
     const q = quality(mine);
-    if (q.nonEmpty < 3 || q.matched >= q.nonEmpty * 0.6) continue;
+    if (q.nonEmpty < 3 || q.matched >= q.nonEmpty * Math.min(opts.retryBelow, opts.follow ? 0.6 : 1) - 1e-9) continue;
+    narrowFromBase ??= alignCalibration(ref, base, NARROW_ALIGN).calibration;
     wideFromBase ??= alignCalibration(ref, base, DEFAULT_ALIGN).calibration;
-    const candidates = [wideFromBase.pages[p], base.pages[p]];
+    const candidates = [narrowFromBase.pages[p], wideFromBase.pages[p]];
     if (usable) {
-      // Late in a thick binder the pages can be beyond reach of the outline; try around the last good position too.
-      wideFromPrev ??= alignCalibration(ref, usable, DEFAULT_ALIGN).calibration;
-      candidates.unshift(usable.pages[p], wideFromPrev.pages[p]);
+      narrowFromPrev ??= alignCalibration(ref, usable, NARROW_ALIGN).calibration;
+      candidates.push(usable.pages[p], narrowFromPrev.pages[p]);
     }
     let best = { pockets: mine, q, quad: pages[p] };
     for (const quad of candidates) {
       const single: Calibration = { ...base, pages: [quad] };
       const res = recognizeSpread(frames, single, idx, cfg).map((r) => ({ ...r, page: p }));
       const rq = quality(res);
-      if (better(rq, best.q)) best = { pockets: res, q: rq, quad };
+      const gain = opts.follow ? 1 : opts.minGain;
+      if (rq.matched >= best.q.matched + gain || (best.quad !== pages[p] && better(rq, best.q))) best = { pockets: res, q: rq, quad };
     }
     if (best.quad !== pages[p]) {
       pages[p] = best.quad;

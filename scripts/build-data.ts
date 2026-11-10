@@ -26,6 +26,15 @@ const outDir = join(root, 'public', 'data');
 // (as long as the install step is `npm install`; `npm ci` deletes node_modules first).
 const cacheDir = process.env.MTGDB_CACHE_DIR ?? (process.env.VERCEL ? join(root, 'node_modules', '.cache', 'mtgdb') : join(root, 'data-cache'));
 const UA = 'MTGDB-binder-scanner/0.1 (personal collection tool)';
+
+/** Non-English printings by language, as indices into the card list (Scryfall lists a printing in another language when that art or card wasn't printed in English). */
+function nonEnglish(langs: string[]): Record<string, number[]> {
+  const out: Record<string, number[]> = {};
+  langs.forEach((l, i) => {
+    if (l && l !== 'en') (out[l] ??= []).push(i);
+  });
+  return out;
+}
 const args = process.argv.slice(2);
 const limit = args.includes('--limit') ? Number(args[args.indexOf('--limit') + 1]) : Infinity;
 const CONCURRENCY = 8;
@@ -100,6 +109,7 @@ async function main() {
 
   const rows: CardRow[] = [];
   const images: string[] = [];
+  const langs: string[] = [];
   const sets: Record<string, string> = {};
   for await (const raw of streamArray(bulkPath)) {
     const c = raw as ScryCard;
@@ -111,6 +121,7 @@ async function main() {
     const fin = (c.finishes.includes('nonfoil') ? 1 : 0) | (c.finishes.includes('foil') ? 2 : 0) | (c.finishes.includes('etched') ? 4 : 0);
     rows.push([c.id, c.name, c.set, c.collector_number, c.rarity, fin, price(c.prices.usd), price(c.prices.usd_foil), price(c.prices.usd_etched), BORDER_CODE[c.border_color] ?? '', printingPriority(c)]);
     images.push(img);
+    langs.push(c.lang);
     sets[c.set] = c.set_name;
     if (rows.length >= limit) break;
   }
@@ -191,6 +202,7 @@ async function main() {
     sets,
     cards: outRows,
     back,
+    langs: nonEnglish(keep.map((i) => langs[i])),
   };
   writeFileSync(join(outDir, 'cards.json'), JSON.stringify(file));
   writeFileSync(join(outDir, 'fingerprints.bin'), encodeFingerprints(outFps, keep.length));

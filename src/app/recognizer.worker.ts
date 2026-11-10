@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 // Runs recognition off the UI thread so the camera preview stays smooth.
-import type { MatchIndex } from '../core/recognize.ts';
+import { DEFAULT_RECOGNIZE, type MatchIndex } from '../core/recognize.ts';
 import { isJunkReading, recognizeTrackedSpread } from '../core/scan.ts';
 import type { Calibration } from '../core/geometry.ts';
 import type { RGBAImage } from '../core/image.ts';
@@ -39,8 +39,12 @@ async function handle(ev: MessageEvent<WorkerRequest>) {
   const msg = ev.data;
   try {
     if (msg.type === 'init') {
-      index = { fps: msg.fps, count: msg.count, nameOf: msg.nameOf, back: msg.back };
+      index = { fps: msg.fps, count: msg.count, nameOf: msg.nameOf, back: msg.back, allowed: msg.allowed ?? null };
       post({ type: 'ready' });
+      return;
+    }
+    if (msg.type === 'allowed') {
+      if (index) index.allowed = msg.allowed;
       return;
     }
     if (msg.type === 'spread') {
@@ -48,7 +52,8 @@ async function handle(ev: MessageEvent<WorkerRequest>) {
       const t0 = performance.now();
       const frames: RGBAImage[] = msg.frames.map((f) => ({ width: f.width, height: f.height, data: new Uint8ClampedArray(f.buffer) }));
       const prev = tracking?.runId === msg.runId ? tracking.calibration : undefined;
-      const tracked = recognizeTrackedSpread(frames, msg.calibration, prev, index);
+      // Every card's title line comes back, so its name can be read as a cross-check of the image match.
+      const tracked = recognizeTrackedSpread(frames, msg.calibration, prev, index, { ...DEFAULT_RECOGNIZE, nameCropAll: true });
       if (msg.tentative && isJunkReading(tracked.pockets)) {
         // Caught the page mid-turn: keep tracking from the last good spread.
         post({ type: 'spread', job: msg.job, pockets: [], ms: performance.now() - t0, calibration: tracked.calibration, retried: [], discarded: true });

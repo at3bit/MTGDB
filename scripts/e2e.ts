@@ -17,6 +17,7 @@ import { makeCard, renderSpread, rng, toReferenceSize, SCENE_PAGES } from '../te
 import type { RGBAImage } from '../src/core/image.ts';
 import { writeDataVersion } from './data-version.ts';
 import { strFromU8, unzipSync } from 'fflate';
+import sharp from 'sharp';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_PATH ?? 'playwright');
@@ -93,6 +94,15 @@ await new Promise<void>((resolve, reject) => {
   ff.stdin.end();
 });
 console.log(`video: ${frames.length} frames, ${(statSync(videoPath).size / 1e6).toFixed(1)} MB`);
+// Photos of the three spreads, as JPEGs from the Camera app would be.
+const photoPaths = await Promise.all(
+  [0, 1, 2].map(async (s) => {
+    const p = join(out, `photo-${s + 1}.jpg`);
+    const img = still[s][1];
+    await sharp(Buffer.from(img.data.buffer, img.data.byteOffset, img.data.byteLength), { raw: { width: img.width, height: img.height, channels: 4 } }).jpeg({ quality: 92 }).toFile(p);
+    return p;
+  }),
+);
 // A second video with quick flips: spread 2 is on screen, still, for only a moment before the next turn.
 const fastPath = join(out, 'fast.webm');
 {
@@ -218,7 +228,7 @@ try {
   await page.getByRole('button', { name: 'Save binder' }).click();
   await page.getByRole('button', { name: 'Export CSV' }).waitFor({ timeout: 10000 });
   await page.screenshot({ path: join(out, '7-binder-gallery.png'), fullPage: true });
-  const identified = tiles.filter((t) => !['Empty', '?', 'Check', '—'].includes(t.name)).length;
+  const identified = tiles.filter((t) => !['Empty', 'Not identified', 'Check', '—'].includes(t.name) && !t.name.endsWith('?')).length;
   // List view, sorted by price (the binder's default sort).
   await page.getByRole('button', { name: 'List', exact: true }).click();
   const listRows = page.locator('[data-testid=cards-list] li');
@@ -314,6 +324,22 @@ try {
   check(dead.spreads >= 1 && /stopped responding/.test(message ?? ''), `video stops responding: "${message}"; ${dead.spreads} spread(s) kept for review`);
   await page.evaluate(() => ((window as any).__seeks = { n: 0, drop: [], deadFrom: Infinity }));
   await page.getByRole('button', { name: /Discard/ }).click();
+
+  // Photos, one per spread, with the outline lined up on each (the default).
+  await page.getByRole('button', { name: 'Scan a binder' }).click();
+  await page.locator('input[type=text]').fill('Photo Binder');
+  await page.setInputFiles('[data-testid=photo-input]', photoPaths);
+  await page.getByRole('button', { name: 'Read 3 photos' }).waitFor({ timeout: 20000 });
+  await page.screenshot({ path: join(out, '13-photos-lineup.png') });
+  await page.getByRole('button', { name: 'Read 3 photos' }).click();
+  for (let k = 2; k <= 3; k++) {
+    await page.getByRole('heading', { name: `Photo ${k} of 3` }).waitFor({ timeout: 30000 });
+    await page.getByRole('button', { name: 'Use this photo' }).click();
+  }
+  await page.getByText('Review “Photo Binder”').waitFor({ timeout: 120000 });
+  const fromPhotos = await reviewed();
+  check(fromPhotos.spreads === 3 && fromPhotos.right >= 52, `photos (lined up on each): ${fromPhotos.spreads} spreads, ${fromPhotos.right}/${fromPhotos.total} pockets right`);
+  await page.getByRole('button', { name: /Discard/ }).click();
 } catch (e) {
   failed = true;
   console.error(e);
@@ -402,7 +428,8 @@ try {
   await cam.getByRole('button', { name: 'Pause & adjust' }).click();
   await cam.getByRole('button', { name: 'Continue' }).waitFor();
   const handles = await cam.locator('circle.handle').count();
-  check(handles === 8, `paused: outline is editable (${handles} corner handles)`);
+  const gapHandles = await cam.locator('rect.handle.gap').count();
+  check(handles === 4 && gapHandles === 1, `paused: one outline to edit (${handles} corner handles, ${gapHandles} spine handle)`);
   await cam.screenshot({ path: join(out, '9-camera-paused.png') });
   await cam.getByRole('button', { name: 'Continue' }).click();
   await cam.getByRole('button', { name: 'Snap page' }).waitFor();
@@ -410,6 +437,11 @@ try {
   await cam.keyboard.press('Space'); // a Bluetooth page-turner sends keys like this
   await cam.getByText('· 2 spreads').waitFor({ timeout: 20000 });
   check(true, 'Space key captured spread 2');
+  // Timed shots: a countdown, then a shot with "Turn the page" (the same spread again, so it's merged as a repeat).
+  await cam.getByRole('button', { name: 'Timer', exact: true }).click();
+  await cam.locator('.countdown').first().waitFor({ timeout: 5000 });
+  await cam.getByText('Turn the page').waitFor({ timeout: 8000 });
+  check(true, 'timer mode counts down and takes a shot');
   await cam.getByRole('button', { name: 'Finish' }).click();
   await cam.getByText('Review “Camera binder”').waitFor({ timeout: 60000 });
   const camSpreads = await cam.locator('strong', { hasText: /^Spread \d+$/ }).count();

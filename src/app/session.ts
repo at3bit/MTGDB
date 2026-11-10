@@ -38,6 +38,13 @@ export interface PocketView {
   /** Identified from a blurry photo (too little fine detail): worth re-scanning that page. */
   blurry?: boolean;
   /**
+   * The card's printed name, read with OCR, against the image match: 'agrees' confirms it, 'differs' means
+   * the name clearly reads as another card (readName) so the pocket is flagged, 'unread' means no clean read.
+   */
+  nameCheck?: 'agrees' | 'differs' | 'unread';
+  /** Card name (index into CardDB.names) read from the card when it differs from the match, or a weak read offered as a suggestion. */
+  readName?: number;
+  /**
    * The card was seen through an empty sleeve: it's really on a neighbouring
    * sheet, where it's recorded. Not counted or saved here. Recomputed after
    * every capture (see markGhosts).
@@ -105,8 +112,8 @@ export function toPocketView(p: WirePocket, db: CardDB): PocketView {
 export function settlePrinting(p: PocketView, db: CardDB): PocketView {
   if (p.chosen === null || p.via === 'manual') return p;
   const choice = resolvePrinting(db, db.nameOf[p.chosen], p.query, p.borderLuma);
-  const status: PocketStatus = choice.ambiguous && p.status === 'matched' ? 'uncertain' : p.status;
-  return { ...p, chosen: choice.card, status, printingCheck: choice.ambiguous, ties: choice.ambiguous ? choice.ties.map((t) => t.card) : undefined };
+  // The name stays as sure as it was; an ambiguous printing is flagged separately (printingCheck).
+  return { ...p, chosen: choice.card, printingCheck: choice.ambiguous, ties: choice.ambiguous ? choice.ties.map((t) => t.card) : undefined };
 }
 
 /** One capture of a spread, as it arrives from the recognizer. */
@@ -281,7 +288,7 @@ export function binderEntries(spreads: Spread[], _pagesPerSpread: number, db: Ca
   const out: BinderEntry[] = [];
   spreads.forEach((s, si) => {
     for (const p of [...s.pockets].sort((a, b) => a.page - b.page || a.slot - b.slot)) {
-      if (p.chosen === null || p.ghost || p.cardBack) continue;
+      if (p.chosen === null || p.ghost || p.cardBack || nameUnsure(p)) continue;
       const key = `${db.info(p.chosen).id}:${p.finish}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -311,20 +318,38 @@ export function rankPrintings(db: CardDB, nameIdx: number, pocket?: Pick<PocketV
 }
 
 /** Applies an OCR reading of the title line to a pocket. */
+/**
+ * Uses the card's printed name, read with OCR. For a card the image match identified, it's a cross-check:
+ * agreeing confirms it, a clean read of a different name flags it. For one it didn't, the name identifies
+ * the card only when the read is clean or agrees with an image candidate; a weak read is only a suggestion,
+ * so a misread never turns into a confident wrong card.
+ */
 export function applyOcr(p: PocketView, text: string, db: CardDB): PocketView {
   const hits = db.fuzzyNames(text, 3);
   const top = hits[0];
-  if (!top || top.score < 0.45) return { ...p, ocrText: text };
-  const choice = resolvePrinting(db, top.name, p.query, p.borderLuma);
+  const strongRead = !!top && top.score >= 0.75 && (hits[1]?.score ?? 0) < top.score - 0.15;
+  if (p.status === 'matched' && p.via === 'image' && p.chosen !== null) {
+    const imageName = db.nameOf[p.chosen];
+    if (top && top.score >= 0.45 && top.name === imageName) return { ...p, ocrText: text, nameCheck: 'agrees', nameCrop: undefined };
+    if (strongRead && top.name !== imageName) return { ...p, ocrText: text, nameCheck: 'differs', readName: top.name, status: 'uncertain' };
+    return { ...p, ocrText: text, nameCheck: 'unread' };
+  }
+  if (!top || top.score < 0.45) return { ...p, ocrText: text, nameCheck: 'unread' };
   // The text agrees with one of the image candidates, or is a clean read on its own.
   const agreesWithImage = p.matches.some((m) => db.nameOf[m.card] === top.name);
-  const strongRead = top.score >= 0.75 && (hits[1]?.score ?? 0) < top.score - 0.15;
-  const status: PocketStatus = (agreesWithImage || strongRead) && !choice.ambiguous ? 'matched' : 'uncertain';
-  return { ...p, ocrText: text, chosen: choice.card, status, via: 'text', printingCheck: choice.ambiguous, ties: choice.ambiguous ? choice.ties.map((t) => t.card) : undefined };
+  if (!agreesWithImage && !strongRead) return { ...p, ocrText: text, nameCheck: 'unread', readName: top.name };
+  const choice = resolvePrinting(db, top.name, p.query, p.borderLuma);
+  return { ...p, ocrText: text, nameCheck: 'agrees', chosen: choice.card, status: 'matched', via: 'text', printingCheck: choice.ambiguous, ties: choice.ambiguous ? choice.ties.map((t) => t.card) : undefined };
 }
 
+/** Every card's name is read once, as a cross-check (see applyOcr). */
 export function needsOcr(p: PocketView): boolean {
-  return !!p.nameCrop && p.via !== 'manual' && (p.status === 'uncertain' || p.status === 'unknown');
+  return !!p.nameCrop && p.via !== 'manual' && !p.cardBack && p.status !== 'empty' && p.nameCheck === undefined;
+}
+
+/** The card's name isn't settled: shown as a question, and not saved or counted until confirmed. */
+export function nameUnsure(p: PocketView): boolean {
+  return p.status === 'uncertain' && p.via !== 'manual';
 }
 
 export function pocketPrice(db: CardDB, p: { chosen: number | null; finish: Finish; ghost?: boolean; cardBack?: boolean }, live?: LivePrices): number | null {

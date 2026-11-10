@@ -27,7 +27,7 @@ import { CardDB, decodeFingerprints, type CardsFile } from '../src/core/carddb.t
 import { calibrationBounds, type Calibration, type Quad } from '../src/core/geometry.ts';
 import { createRGBA, resampleGray, toGray, type GrayImage, type RGBAImage } from '../src/core/image.ts';
 import { DEFAULT_MOTION, SpreadWatcher } from '../src/core/motion.ts';
-import { isJunkReading, recognizeTrackedSpread } from '../src/core/scan.ts';
+import { DEFAULT_TRACK, isJunkReading, recognizeTrackedSpread } from '../src/core/scan.ts';
 import { addReading, binderEntries, mergeInto, settlePrinting, type BinderEntry, type PocketView, type Spread } from '../src/app/session.ts';
 import { defocusBlur, renderSpread, rng, SCENE_PAGES } from '../tests/synth.ts';
 import { DEFAULT_RECOGNIZE } from '../src/core/recognize.ts';
@@ -58,6 +58,8 @@ const REFOCUS_BLUR = arg('--refocus-blur', 3);
 // --old-capture: the capture rule before sharpest-frame capture (capture as soon as the page settles). --live: live-camera timing.
 const OLD_CAPTURE = process.argv.includes('--old-capture');
 const LIVE = process.argv.includes('--live');
+// --follow: the old page tracking (re-find and follow the pages every spread); --retry-below F / --min-gain N tune the new rule.
+const TRACK = { ...DEFAULT_TRACK, follow: process.argv.includes('--follow'), retryBelow: arg('--retry-below', DEFAULT_TRACK.retryBelow), minGain: arg('--min-gain', DEFAULT_TRACK.minGain) };
 const W = 1920, H = 1080;
 /** A card's width in the frame (a third of a page). */
 const CARD_PX = (W * 0.41) / 3;
@@ -67,10 +69,13 @@ const r = rng(SEED);
 const file = JSON.parse(readFileSync(join(root, 'public/data/cards.json'), 'utf8')) as CardsFile;
 const fpBuf = readFileSync(join(root, 'public/data/fingerprints.bin'));
 const db = new CardDB(file, decodeFingerprints(fpBuf.buffer.slice(fpBuf.byteOffset, fpBuf.byteOffset + fpBuf.byteLength) as ArrayBuffer));
+// The app matches English printings only unless told otherwise (--all-languages); the binder holds English cards.
+db.setEnglishOnly(!process.argv.includes('--all-languages'));
 const used = new Set<number>();
 const pick = () => {
   for (;;) {
     const i = Math.floor(r() * db.count);
+    if (db.foreign[i]) continue;
     if (!used.has(i) && !used.has(-db.nameOf[i] - 1)) { used.add(i); used.add(-db.nameOf[i] - 1); return i; }
   }
 };
@@ -317,11 +322,11 @@ if (OLD_CAPTURE) {
 let spreads: Spread[] = [];
 const truthOfSpread = new Map<number, number>();
 let tracked: Calibration | undefined;
-const idx = { fps: db.fps, count: db.count, nameOf: db.nameOf, back: LEGACY ? undefined : db.back };
+const idx = { fps: db.fps, count: db.count, nameOf: db.nameOf, back: LEGACY ? undefined : db.back, allowed: db.allowed };
 if (!LEGACY && !db.back) console.warn('card data has no card-back fingerprint; run npm run data');
 for (const c of captures) {
   const frames = DEFOCUS ? c.frames.map((f) => defocusBlur({ ...f, data: new Uint8ClampedArray(f.data) }, (DEFOCUS / 100) * CARD_PX)) : c.frames;
-  const tr = recognizeTrackedSpread(frames, calibration, tracked, idx, RECOGNIZE);
+  const tr = recognizeTrackedSpread(frames, calibration, tracked, idx, RECOGNIZE, TRACK);
   if (c.brief && isJunkReading(tr.pockets)) {
     log.push(`brief capture at ${c.time.toFixed(1)}s read as junk (${c.truthSpread >= 0 ? `spread ${c.truthSpread + 1}` : 'a page turn'}): dropped`);
     continue;

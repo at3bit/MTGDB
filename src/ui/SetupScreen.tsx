@@ -1,15 +1,19 @@
 import { useRef, useState } from 'react';
 import type { Collection } from '../app/store.ts';
+import type { ScanSource } from './ScanScreen.tsx';
 
 interface Props {
   collection: Collection;
-  onStart: (binder: string, source: 'camera' | File) => void;
+  englishOnly: boolean;
+  onEnglishOnly: (on: boolean) => void;
+  onStart: (binder: string, source: ScanSource) => void;
   onBack: () => void;
 }
 
-export function SetupScreen({ collection, onStart, onBack }: Props) {
+export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, onBack }: Props) {
   const [name, setName] = useState(collection.binders[0]?.name ?? 'Binder 1');
   const fileInput = useRef<HTMLInputElement>(null);
+  const photoInput = useRef<HTMLInputElement>(null);
   const exists = collection.binders.some((b) => b.name === name.trim());
 
   return (
@@ -29,12 +33,35 @@ export function SetupScreen({ collection, onStart, onBack }: Props) {
           </datalist>
         </label>
         {exists && <div className="muted small">Saving will replace the cards stored for “{name.trim()}”.</div>}
-        <button className="btn primary block" disabled={!name.trim()} onClick={() => onStart(name.trim(), 'camera')}>
+        <label className="row small" style={{ gap: 8 }}>
+          <input type="checkbox" checked={englishOnly} onChange={(e) => onEnglishOnly(e.target.checked)} />
+          <span>My cards are in English <span className="muted">(ignore foreign-language printings, which often share art with English ones)</span></span>
+        </label>
+        <button className="btn primary block" disabled={!name.trim()} onClick={() => photoInput.current?.click()}>
+          Upload photos (one per page)
+        </button>
+        <p className="muted small" style={{ margin: '-4px 0 0' }}>
+          Most accurate: take a photo of each page (or open binder) with the Camera app, then pick them all here, in page order.
+        </p>
+        <button className="btn block" disabled={!name.trim()} onClick={() => onStart(name.trim(), 'camera')}>
           Use live camera
         </button>
         <button className="btn block" disabled={!name.trim()} onClick={() => fileInput.current?.click()}>
           Upload a video of the run
         </button>
+        <input
+          ref={photoInput}
+          type="file"
+          accept="image/*"
+          multiple
+          style={{ display: 'none' }}
+          data-testid="photo-input"
+          onChange={(e) => {
+            const files = [...(e.target.files ?? [])];
+            e.target.value = '';
+            if (files.length) onStart(name.trim(), files);
+          }}
+        />
         <input
           ref={fileInput}
           type="file"
@@ -48,31 +75,24 @@ export function SetupScreen({ collection, onStart, onBack }: Props) {
         />
       </div>
       <div className="card">
-        <h2>Before you record</h2>
-        <p className="muted small" style={{ marginTop: 0 }}>Most misread cards come from blurry photos. These settings fix most of that.</p>
+        <h2>For the best results</h2>
         <ol className="tips checklist">
           <li>
-            <strong>Settings › Camera › Record Video:</strong> choose <strong>4K at 30 fps</strong>, turn <strong>HDR Video</strong> off, and
-            turn <strong>Lock Camera</strong> on (so the phone doesn’t switch lenses mid-run). Turn Auto FPS off if you see it.
+            <strong>Photos are the most accurate.</strong> Hold the phone flat over the binder and fill the frame with one page (or both
+            pages of the open binder). Tap the cards on screen to focus before each shot. On a tripod, take the shot with the volume
+            button, an Apple Watch or a Bluetooth shutter so the phone doesn’t move. Then pick all the photos here, in page order.
           </li>
           <li>
-            <strong>Lock focus:</strong> in the Camera app, frame the open binder, then press and hold on the cards until
-            <strong> AE/AF LOCK</strong> appears. Then start recording.
+            <strong>Light:</strong> bright and even, from two sides (or diffused), so the sleeves don’t glare.
           </li>
           <li>
-            <strong>Height:</strong> phone flat, about 50 cm (20 in) above the table. If one page comes out soft, raise the phone a little:
-            the two halves of a thick binder sit at different heights.
-          </li>
-          <li>
-            <strong>Light:</strong> bright and even, from two sides (or diffused), to avoid glare and slow, blurry exposures.
-          </li>
-          <li>
-            <strong>Pace:</strong> pause about half a second on each spread and keep your hand out of frame between turns. Keep the binder in
-            one spot (a strip of tape helps).
+            <strong>Video instead?</strong> Settings › Camera › Record Video: <strong>4K at 30 fps</strong>, <strong>HDR Video</strong> off,
+            <strong> Lock Camera</strong> on. In the Camera app, press and hold on the cards until <strong>AE/AF LOCK</strong> appears, then
+            record, pausing about half a second on each spread.
           </li>
         </ol>
         <p className="muted small" style={{ marginBottom: 0 }}>
-          This app can’t lock the live camera’s focus, so a video recorded this way and uploaded gives the sharpest results.
+          This app can’t lock the live camera’s focus, so photos or a video from the Camera app read more cards correctly.
         </p>
       </div>
     </div>

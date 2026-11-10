@@ -66,7 +66,7 @@ export function referencePrice(info: CardInfo): number | null {
 /** Printings of a name, best guess first. */
 export function rankPrintings(db: CardDB, nameIdx: number, query?: Uint32Array, borderLuma?: number, cfg: PrintingConfig = DEFAULT_PRINTING): RankedPrinting[] {
   const measured = measuredBorder(borderLuma, cfg);
-  return db.printings[nameIdx]
+  return db.printingsOf(nameIdx)
     .map((card) => {
       const info = db.info(card);
       const d = query ? fpDistance(query, db.fps, card) : 0;

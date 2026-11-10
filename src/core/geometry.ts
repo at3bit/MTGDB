@@ -151,6 +151,34 @@ export interface Calibration {
   pages: Quad[];
   rows: number;
   cols: number;
+  /**
+   * Open binder drawn as one outline around both pages: the spine gap between them, as a fraction of
+   * the outline's width. The pages are derived from the outline (see withOutline).
+   */
+  gap?: number;
+}
+
+/** The single outline the user edits: around the page, or around both pages of an open binder. */
+export function outlineOf(cal: Calibration): { quad: Quad; gap: number } {
+  if (cal.pages.length === 1) return { quad: cal.pages[0], gap: 0 };
+  const L = cal.pages[0], R = cal.pages[cal.pages.length - 1];
+  const quad: Quad = [L[0], R[1], R[2], L[3]];
+  if (cal.gap !== undefined) return { quad, gap: cal.gap };
+  // An older two-page layout: measure the gap along the top edge, in the outline's own coordinates.
+  const toUnit = homography(quad, UNIT_QUAD);
+  const gap = applyH(toUnit, R[0].x, R[0].y).x - applyH(toUnit, L[1].x, L[1].y).x;
+  return { quad, gap: Math.min(MAX_GAP, Math.max(0, gap)) };
+}
+
+/** Widest spine gap allowed, as a fraction of the outline's width. */
+export const MAX_GAP = 0.4;
+
+/** The pages for an outline: the whole outline (one page), or its two halves either side of the spine gap. */
+export function withOutline(cal: Calibration, quad: Quad, gap: number): Calibration {
+  if (cal.pages.length === 1) return { pages: [quad], rows: cal.rows, cols: cal.cols };
+  const g = Math.min(MAX_GAP, Math.max(0, gap));
+  const half = (1 - g) / 2;
+  return { pages: [subQuad(quad, 0, 0, half, 1), subQuad(quad, 1 - half, 0, 1, 1)], rows: cal.rows, cols: cal.cols, gap: g };
 }
 
 export type Rotation = 0 | 90 | 180 | 270;
@@ -185,7 +213,10 @@ export function defaultCalibration(frameW = 16, frameH = 9, rotation: Rotation =
     const y0 = -ph / 2;
     quads.push([toFrame(x0, y0), toFrame(x0 + pw, y0), toFrame(x0 + pw, y0 + ph), toFrame(x0, y0 + ph)]);
   }
-  return { pages: quads, rows: 3, cols: 3 };
+  const cal: Calibration = { pages: quads, rows: 3, cols: 3 };
+  if (pages < 2) return cal;
+  const { quad, gap: g } = outlineOf(cal);
+  return withOutline(cal, quad, g);
 }
 
 /**

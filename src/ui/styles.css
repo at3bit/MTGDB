@@ -83,7 +83,9 @@ label.field > span { display: block; font-size: 13px; color: var(--muted); margi
 /* Camera stage */
 .stage-wrap { display: flex; justify-content: center; margin: 0 -16px 12px; background: #000; }
 .stage { position: relative; width: min(100%, calc(64vh * var(--ar))); aspect-ratio: var(--ar); }
-.stage video { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.stage video, .stage img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; object-fit: fill; }
+.countdown { position: absolute; right: 12px; bottom: 12px; width: 72px; height: 72px; border-radius: 50%; background: rgba(0, 0, 0, 0.7); display: grid; place-items: center; font-size: 34px; font-weight: 800; font-variant-numeric: tabular-nums; pointer-events: none; }
+.countdown.turn { width: auto; height: auto; border-radius: 999px; padding: 10px 16px; font-size: 18px; color: var(--ok); }
 .stage svg { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
 .quad { fill: rgba(232, 178, 79, 0.08); stroke: var(--accent); }
 .quad.locked { fill: none; }
@@ -91,6 +93,8 @@ label.field > span { display: block; font-size: 13px; color: var(--muted); margi
 .topedge { stroke: #fff; }
 .handle { fill: var(--accent); stroke: #000; cursor: grab; }
 .handle-hit { fill: transparent; }
+.spine { fill: rgba(0, 0, 0, 0.35); stroke: none; }
+.handle.gap { fill: #fff; }
 .status-pill { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); background: rgba(0, 0, 0, 0.7); padding: 6px 12px; border-radius: 999px; font-weight: 600; font-size: 14px; white-space: nowrap; }
 .status-pill .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; background: var(--muted); }
 .status-pill.moving .dot { background: var(--warn); }

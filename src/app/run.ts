@@ -9,8 +9,11 @@ import { FrameReader, type FrameSource } from './capture.ts';
 import type { Recognizer, SpreadReading } from './data.ts';
 import type { WireImage } from './protocol.ts';
 
-/** 'auto': capture whenever the page settles after a turn. 'manual': only when snap() is called. */
-export type CaptureMode = 'auto' | 'manual';
+/**
+ * 'auto': capture whenever the page settles after a turn. 'manual': only when snap() is called.
+ * 'timed': the scan screen calls snap() on a countdown (every few seconds), so the user turns the page after each shot.
+ */
+export type CaptureMode = 'auto' | 'manual' | 'timed';
 
 export interface RunStatus {
   phase: 'watching' | 'moving' | 'settled' | 'paused' | 'finishing' | 'done';
@@ -39,6 +42,8 @@ export interface RunEvents {
   captured?(how: 'auto' | 'manual'): void;
   /** The frames of a capture, just before they're sent to be read (for diagnostics). */
   sent?(f: SentFrames): void;
+  /** Photos: the run is waiting for the outline to be lined up on photo `index` (resume() to use it, skip() to leave it out). */
+  lineUp?(index: number, count: number, reason: 'each' | 'shape'): void;
   spread(r: SpreadReading & { time: number; change: number; manual: boolean }): void;
   error(e: Error): void;
 }
@@ -59,6 +64,10 @@ export class RunController {
   private jobs: Promise<void>[] = [];
   private bounds = { x0: 0, y0: 0, x1: 1, y1: 1 };
   private patches: FocusPatch[] = [];
+  /** Photos: wait for the user to line up the outline on every photo, not just the first. */
+  lineUpEach = false;
+  private skipping = false;
+  private mode_: CaptureMode;
 
   constructor(
     private src: FrameSource,
@@ -67,15 +76,17 @@ export class RunController {
     private on: RunEvents,
     mode: CaptureMode = 'auto',
   ) {
+    this.mode_ = mode;
     this.policy = this.newPolicy(mode);
   }
 
   get mode(): CaptureMode {
-    return this.policy.mode;
+    return this.mode_;
   }
 
   set mode(m: CaptureMode) {
-    this.policy.mode = m;
+    this.mode_ = m;
+    this.policy.mode = m === 'auto' ? 'auto' : 'manual';
   }
 
   stop() {
@@ -99,6 +110,12 @@ export class RunController {
     this.wake?.();
   }
 
+  /** Photos: leave out the photo waiting to be lined up. */
+  skip() {
+    this.skipping = true;
+    this.resume();
+  }
+
   /** Capture the current view as a page now (the sharpest of the next few samples). */
   snap() {
     this.policy.snap();
@@ -111,6 +128,7 @@ export class RunController {
 
   async run(): Promise<void> {
     this.running = true;
+    if (this.src.kind === 'photos') return this.runPhotos();
     this.layout();
     let failures = 0;
     const endEarly = (e: unknown) => {
@@ -159,25 +177,68 @@ export class RunController {
     this.status('done');
   }
 
+  /** Photos: each one is a capture. The outline from the first photo is used for all, or lined up on each. */
+  private async runPhotos() {
+    const shape = this.src.width / this.src.height;
+    const wait = async () => {
+      this.status('paused');
+      await new Promise<void>((resolve) => (this.wake = resolve));
+      this.wake = null;
+    };
+    while (this.running) {
+      try {
+        if (!(await this.src.next())) break;
+      } catch (e) {
+        this.endedEarly = e instanceof Error ? e : new Error(String(e));
+        this.on.error(this.endedEarly);
+        break;
+      }
+      const index = this.src.index ?? 0;
+      // A photo of a different shape (portrait vs landscape) needs its own outline.
+      const reshaped = Math.abs(this.src.width / this.src.height - shape) > 0.02;
+      if (this.paused || ((this.lineUpEach || reshaped) && index > 0)) {
+        this.paused = true;
+        this.on.lineUp?.(index, this.src.count ?? 1, reshaped ? 'shape' : 'each');
+        await wait();
+        if (!this.running) break;
+      }
+      if (this.skipping) {
+        this.skipping = false;
+        continue;
+      }
+      try {
+        this.layout();
+        this.reader.keep(this.src, 0);
+        this.send({ slots: [0], time: index, change: Infinity, manual: true, brief: false, focus: [] });
+        this.status('settled');
+      } catch (e) {
+        this.on.error(e instanceof Error ? e : new Error(String(e)));
+      }
+      while (this.running && this.rec.inFlight >= 2) await sleep(50);
+    }
+    this.status('finishing');
+    await Promise.all(this.jobs);
+    this.status('done');
+  }
+
   private newPolicy(mode: CaptureMode) {
     const policy = new CapturePolicy(this.cal.pages.length, { ...DEFAULT_CAPTURE, live: this.src.kind === 'camera' });
-    policy.mode = mode;
+    policy.mode = mode === 'auto' ? 'auto' : 'manual';
     return policy;
   }
 
   /** Where to look: the outline's bounds for page turns, pocket centres for focus. */
   private layout() {
     this.bounds = calibrationBounds(this.cal);
-    this.patches = focusPatches(this.cal, this.src.video.videoWidth, this.src.video.videoHeight);
+    this.patches = focusPatches(this.cal, this.src.width, this.src.height);
   }
 
   /** One sample of the video: page-turn detection, focus, and captures. */
   private sample() {
-    const video = this.src.video;
-    const thumb = this.reader.thumb(video, this.bounds);
-    const focus = this.reader.focus(video, this.patches, this.cal.pages.length);
+    const thumb = this.reader.thumb(this.src, this.bounds);
+    const focus = this.reader.focus(this.src, this.patches, this.cal.pages.length);
     const step = this.policy.sample(thumb, focus, this.src.time());
-    for (const slot of step.keep) this.reader.keep(video, slot);
+    for (const slot of step.keep) this.reader.keep(this.src, slot);
     this.send(step.send);
     this.status(this.policy.state === 'moving' ? 'moving' : step.send ? 'settled' : 'watching');
   }

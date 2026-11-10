@@ -10,14 +10,14 @@ import type { WirePocket } from '../app/protocol.ts';
 import type { Calibration } from '../core/geometry.ts';
 import { HomeScreen } from './HomeScreen.tsx';
 import { SetupScreen } from './SetupScreen.tsx';
-import { ScanScreen } from './ScanScreen.tsx';
+import { ScanScreen, type ScanSource } from './ScanScreen.tsx';
 import { ReviewScreen } from './ReviewScreen.tsx';
 import { BinderScreen, CollectionScreen } from './BinderScreen.tsx';
 
 type Screen =
   | { name: 'home' }
   | { name: 'setup' }
-  | { name: 'scan'; binder: string; source: 'camera' | File }
+  | { name: 'scan'; binder: string; source: ScanSource }
   | { name: 'review'; binder: string }
   | { name: 'binder'; binder: string }
   | { name: 'all'; query?: string };
@@ -25,10 +25,28 @@ type Screen =
 let pocketKeys = 0;
 type KeyedPocket = PocketView & { key: number };
 
+const ENGLISH_KEY = 'mtgdb-english-only';
+/** Match English printings only (the default): see CardDB.setEnglishOnly. */
+function readEnglishOnly(): boolean {
+  try {
+    return localStorage.getItem(ENGLISH_KEY) !== 'off';
+  } catch {
+    return true;
+  }
+}
+function writeEnglishOnly(on: boolean) {
+  try {
+    localStorage.setItem(ENGLISH_KEY, on ? 'on' : 'off');
+  } catch {
+    /* private mode */
+  }
+}
+
 export function App() {
   const [db, setDb] = useState<CardDB | null>(null);
   const [dbStatus, setDbStatus] = useState<{ loading: string | null; error: string | null; missing: boolean }>({ loading: 'Loading card database…', error: null, missing: false });
   const [collection, setCollection] = useState<Collection>({ binders: [] });
+  const [englishOnly, setEnglishOnlyState] = useState(readEnglishOnly);
   const [live, setLive] = useState<LivePrices>({});
   const [history, setHistory] = useState<PriceHistory>({});
   const [baselines, setBaselines] = useState<Baselines | null>(null);
@@ -58,6 +76,7 @@ export function App() {
       setHistory(hist);
       try {
         const loaded = await loadCardDB((m) => setDbStatus({ loading: m, error: null, missing: false }));
+        loaded.setEnglishOnly(readEnglishOnly());
         setDb(loaded);
         recognizer.current = new Recognizer(loaded);
         setDbStatus({ loading: null, error: null, missing: false });
@@ -184,6 +203,15 @@ export function App() {
       {screen.name === 'setup' && (
         <SetupScreen
           collection={collection}
+          englishOnly={englishOnly}
+          onEnglishOnly={(on) => {
+            setEnglishOnlyState(on);
+            writeEnglishOnly(on);
+            if (db) {
+              db.setEnglishOnly(on);
+              recognizer.current?.updateAllowed();
+            }
+          }}
           onBack={() => setScreen({ name: 'home' })}
           onStart={(binder, source) => {
             releasePhotos();

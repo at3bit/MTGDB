@@ -5,10 +5,14 @@ import { focusScore, pageFocus, type FocusPatch } from '../core/focus.ts';
 import type { WireImage } from './protocol.ts';
 
 export interface FrameSource {
-  readonly kind: 'camera' | 'file';
-  readonly video: HTMLVideoElement;
+  readonly kind: 'camera' | 'file' | 'photos';
+  /** What frames are read from: the video element, or the photo being shown. */
+  readonly media: HTMLVideoElement | HTMLImageElement;
   readonly width: number;
   readonly height: number;
+  /** Photos: the one showing (0-based) and how many there are. */
+  readonly index?: number;
+  readonly count?: number;
   /** Advance to the next sample. Resolves false when the source has ended. */
   next(): Promise<boolean>;
   /** 0..1 for files; NaN for the camera. */
@@ -65,7 +69,7 @@ export async function openCamera(video: HTMLVideoElement, sampleFps = 15): Promi
   }
   return {
     kind: 'camera',
-    video,
+    media: video,
     get width() { return video.videoWidth; },
     get height() { return video.videoHeight; },
     async next() {
@@ -121,7 +125,7 @@ export async function openVideoFile(video: HTMLVideoElement, file: Blob, sampleF
   let stopped = false;
   return {
     kind: 'file',
-    video,
+    media: video,
     get width() { return video.videoWidth; },
     get height() { return video.videoHeight; },
     async next() {
@@ -152,6 +156,52 @@ export async function openVideoFile(video: HTMLVideoElement, file: Blob, sampleF
   };
 }
 
+/**
+ * Photos taken with the Camera app (one per page or spread), shown one at a time in `img`.
+ * Each is properly focused and full resolution, unlike a video frame. The first photo is
+ * shown straight away for lining up the outline; next() moves through them in order.
+ */
+export async function openPhotos(img: HTMLImageElement, files: File[]): Promise<FrameSource> {
+  if (!files.length) throw new Error('No photos selected.');
+  let url: string | null = null;
+  let i = -1;
+  let stopped = false;
+  const show = async (k: number) => {
+    const next = URL.createObjectURL(files[k]);
+    img.src = next;
+    try {
+      await img.decode();
+    } catch {
+      URL.revokeObjectURL(next);
+      throw new Error(`Couldn’t open photo ${k + 1} (${files[k].name}). If it’s HEIC, share it as JPEG (Most Compatible) and try again.`);
+    }
+    if (url) URL.revokeObjectURL(url);
+    url = next;
+  };
+  await show(0);
+  return {
+    kind: 'photos',
+    media: img,
+    get width() { return img.naturalWidth; },
+    get height() { return img.naturalHeight; },
+    get index() { return Math.max(0, i); },
+    count: files.length,
+    async next() {
+      if (stopped || i + 1 >= files.length) return false;
+      i++;
+      if (i > 0) await show(i);
+      return !stopped;
+    },
+    progress: () => Math.max(0, i + 1) / files.length,
+    time: () => Math.max(0, i),
+    stop() {
+      stopped = true;
+      if (url) URL.revokeObjectURL(url);
+      img.removeAttribute('src');
+    },
+  };
+}
+
 /** A 2D context, or a clear error (iOS refuses new canvases when its canvas memory is used up). */
 function context(c: HTMLCanvasElement, readBack: boolean): CanvasRenderingContext2D {
   const ctx = c.getContext('2d', readBack ? { willReadFrequently: true } : undefined);
@@ -174,10 +224,10 @@ export class FrameReader {
   private slots: HTMLCanvasElement[] = [];
 
   /** Gray thumbnail of a normalised region of the current frame (used for page-turn detection). */
-  thumb(video: HTMLVideoElement, region: { x0: number; y0: number; x1: number; y1: number }, w = 96, h = 54): GrayImage {
+  thumb(src: FrameSource, region: { x0: number; y0: number; x1: number; y1: number }, w = 96, h = 54): GrayImage {
     const ctx = context(sized(this.thumbCanvas, w, h), true);
-    const vw = video.videoWidth, vh = video.videoHeight;
-    ctx.drawImage(video, region.x0 * vw, region.y0 * vh, (region.x1 - region.x0) * vw, (region.y1 - region.y0) * vh, 0, 0, w, h);
+    const vw = src.width, vh = src.height;
+    ctx.drawImage(src.media, region.x0 * vw, region.y0 * vh, (region.x1 - region.x0) * vw, (region.y1 - region.y0) * vh, 0, 0, w, h);
     const d = ctx.getImageData(0, 0, w, h).data;
     const g = new Float32Array(w * h);
     for (let i = 0; i < g.length; i++) g[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
@@ -185,14 +235,14 @@ export class FrameReader {
   }
 
   /** Focus score of each page of the current frame, from small full-resolution patches. */
-  focus(video: HTMLVideoElement, patches: FocusPatch[], pages: number): number[] {
+  focus(src: FrameSource, patches: FocusPatch[], pages: number): number[] {
     if (!patches.length) return new Array(pages).fill(0);
     const total = patches.reduce((a, p) => a + p.size, 0);
     const tall = Math.max(...patches.map((p) => p.size));
     const ctx = context(sized(this.focusCanvas, total, tall), true);
     let x = 0;
     for (const p of patches) {
-      ctx.drawImage(video, p.x, p.y, p.size, p.size, x, 0, p.size, p.size);
+      ctx.drawImage(src.media, p.x, p.y, p.size, p.size, x, 0, p.size, p.size);
       x += p.size;
     }
     const d = ctx.getImageData(0, 0, total, tall).data;
@@ -212,9 +262,9 @@ export class FrameReader {
   }
 
   /** Keeps a copy of the current frame in a slot. Only a canvas copy: the 4K pixels (33 MB) are read out by read(). */
-  keep(video: HTMLVideoElement, slot: number) {
+  keep(src: FrameSource, slot: number) {
     const c = (this.slots[slot] ??= document.createElement('canvas'));
-    context(sized(c, video.videoWidth, video.videoHeight), false).drawImage(video, 0, 0);
+    context(sized(c, src.width, src.height), false).drawImage(src.media, 0, 0, src.width, src.height);
   }
 
   /** Full-resolution pixels of kept frames. */

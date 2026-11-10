@@ -97,6 +97,8 @@ export interface MatchIndex {
   nameOf: Int32Array;
   /** Fingerprint of the Magic card back: a sleeve showing it holds no card on this side. */
   back?: Uint32Array;
+  /** Only these printings may be returned (1 = allowed); e.g. English only. */
+  allowed?: Uint8Array | null;
 }
 
 interface PocketCrop {
@@ -193,8 +195,10 @@ function nearestIn(queries: Uint32Array[], idx: MatchIndex, k: number, subset?: 
   const bestD = new Float32Array(k).fill(Infinity);
   const bestI = new Int32Array(k).fill(-1);
   const n = subset ? subset.length : idx.count;
+  const allowed = idx.allowed;
   for (let j = 0; j < n; j++) {
     const i = subset ? subset[j] : j;
+    if (allowed && !allowed[i]) continue;
     let d = Infinity;
     for (const q of queries) {
       const dq = fpDistance(q, idx.fps, i);

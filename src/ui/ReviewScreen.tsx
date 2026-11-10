@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import { diagnostics, shareDiagnostics } from '../app/diagnostics.ts';
 import { formatUSD, type CardDB, type Finish } from '../core/carddb.ts';
 import type { Baselines } from '../core/baselines.ts';
-import { binderEntries, needsCheck, pocketPrice, rankPrintings, spreadTotal, type LivePrices, type PocketView, type Spread } from '../app/session.ts';
+import { binderEntries, nameUnsure, needsCheck, pocketPrice, rankPrintings, spreadTotal, type LivePrices, type PocketView, type Spread } from '../app/session.ts';
 import { trendFor, type PriceHistory } from '../app/store.ts';
 import { scryfallImage } from '../app/prices.ts';
 import { CardsView, type CardItem } from './CardsView.tsx';
@@ -47,8 +47,15 @@ interface Props {
 function pocketLabel(p: PocketView): string {
   if (p.cardBack) return 'Card back';
   if (p.status === 'empty') return 'Empty';
-  if (p.status === 'unknown') return '?';
+  if (p.status === 'unknown') return 'Not identified';
   return 'Check';
+}
+
+/** A tile's name line: unsure names are shown as a question. */
+function tileName(db: CardDB, p: PocketView): string {
+  if (p.ghost) return 'Seen through sleeve';
+  if (p.chosen === null || p.cardBack) return pocketLabel(p);
+  return nameUnsure(p) ? `${db.info(p.chosen).name}?` : db.info(p.chosen).name;
 }
 
 function pocketClass(p: PocketView): string {
@@ -65,13 +72,14 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
   const entries = useMemo(() => binderEntries(spreads, pagesPerSpread, db), [spreads, pagesPerSpread, db]);
   const total = entries.reduce((t, e) => t + (pocketPrice(db, { chosen: e.card, finish: e.finish }, live) ?? 0), 0);
   const counts = useMemo(() => {
-    const c = { identified: 0, check: 0, empty: 0, seeThrough: 0 };
+    const c = { identified: 0, check: 0, empty: 0, seeThrough: 0, unsure: 0 };
     spreads.forEach((s) =>
       s.pockets.forEach((p) => {
         if (p.ghost) c.seeThrough++;
         else if (p.status === 'empty' || p.cardBack) c.empty++;
         else if (needsCheck(p)) c.check++;
         else c.identified++;
+        if (!p.ghost && nameUnsure(p)) c.unsure++;
       }),
     );
     return c;
@@ -85,11 +93,12 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
         s.pockets
           .filter((p) => !p.ghost && !p.cardBack && p.status !== 'empty')
           .map((p) => {
-            const price = pocketPrice(db, p, live);
-            const info = p.chosen !== null ? db.info(p.chosen) : null;
+            const unsure = nameUnsure(p);
+            const price = unsure ? null : pocketPrice(db, p, live);
+            const info = p.chosen !== null && !unsure ? db.info(p.chosen) : null;
             return {
               key: `${s.id}:${p.page}:${p.slot}`,
-              card: p.chosen,
+              card: unsure ? null : p.chosen,
               finish: p.finish,
               price,
               trend: info ? trendFor(history, info.id, p.finish, price, baselines?.get(p.chosen!, p.finish)) : null,
@@ -97,7 +106,7 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
               order: si * 100 + p.page * 10 + p.slot,
               thumb: p.thumbUrl,
               flagged: needsCheck(p),
-              note: p.printingCheck ? 'Which printing?' : p.seeThrough ? 'Through a sleeve?' : undefined,
+              note: unsure ? `${p.chosen !== null ? db.info(p.chosen).name : 'Name'}? Tap to confirm` : p.printingCheck ? 'Which printing?' : p.seeThrough ? 'Through a sleeve?' : undefined,
               onOpen: () => setOpen({ spread: s.id, page: p.page, slot: p.slot }),
             };
           }),
@@ -127,11 +136,12 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
                     return (
                       <button key={p.slot} className={`tile ${pocketClass(p)}`} onClick={() => setOpen({ spread: s.id, page: p.page, slot: p.slot })}>
                         <img src={p.thumbUrl} alt={info?.name ?? 'pocket'} />
-                        <div className="name">{p.ghost ? 'Seen through sleeve' : info ? info.name : pocketLabel(p)}</div>
+                        <div className="name">{tileName(db, p)}</div>
                         {!p.ghost && p.printingCheck && <div className="price" style={{ color: 'var(--warn)' }}>Which printing?</div>}
                         {!p.ghost && p.seeThrough && <div className="price" style={{ color: 'var(--warn)' }}>Through a sleeve?</div>}
+                        {!p.ghost && nameUnsure(p) && <div className="price" style={{ color: 'var(--warn)' }}>{p.nameCheck === 'differs' ? 'Name reads differently' : 'Tap to confirm'}</div>}
                         <div className="price">
-                          {p.ghost && info ? info.name : info ? `${info.set.toUpperCase()} · ${formatUSD(pocketPrice(db, p, live))}` : ' '}
+                          {p.ghost && info ? info.name : info && !nameUnsure(p) ? `${info.set.toUpperCase()} · ${formatUSD(pocketPrice(db, p, live))}` : ' '}
                           {!p.ghost && p.finish !== 'nonfoil' && ' ✦'}
                         </div>
                       </button>
@@ -155,6 +165,7 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
         <div className="muted small">
           {entries.length} card{entries.length === 1 ? '' : 's'} · {counts.check} to check · {counts.empty} empty
           {counts.seeThrough > 0 && ` · ${counts.seeThrough} seen through empty sleeves (counted on their own page)`}
+          {counts.unsure > 0 && ` · ${counts.unsure} name${counts.unsure === 1 ? '' : 's'} to confirm (not saved or counted until you do)`}
         </div>
         {runStats.captures > 0 && (
           <div className="muted small" style={{ marginTop: 6 }} data-testid="run-stats">
@@ -277,6 +288,27 @@ function PocketSheet({ db, live, pocket, onChange, onReadName, onClose }: SheetP
           <h3>{pocket.status === 'empty' ? 'Empty pocket' : 'Not identified'}</h3>
         )}
         {pocket.ocrText != null && <div className="muted small" style={{ marginTop: 6 }}>Name read as “{pocket.ocrText || '…'}”</div>}
+        {(nameUnsure(pocket) || (pocket.chosen === null && pocket.readName !== undefined)) && (
+          <div className="notice" style={{ marginTop: 12, marginBottom: 0 }}>
+            {pocket.nameCheck === 'differs' && pocket.readName !== undefined
+              ? `The picture looks like ${info?.name ?? 'another card'}, but the name on the card reads as ${db.names[pocket.readName]}. Which is it?`
+              : info
+                ? `Not sure this is ${info.name}. It isn't saved or counted until you confirm it or pick the right card below.`
+                : `The name might be ${db.names[pocket.readName!]}.`}
+            <div className="row" style={{ marginTop: 10, gap: 8, flexWrap: 'wrap' }}>
+              {info && nameUnsure(pocket) && (
+                <button className="btn small" onClick={() => onChange({ ...pocket, status: 'matched', via: 'manual', nameCheck: undefined })}>
+                  It’s {info.name}
+                </button>
+              )}
+              {pocket.readName !== undefined && pocket.readName !== (info ? db.nameOf[info.index] : -1) && (
+                <button className="btn small" onClick={() => choose(rankPrintings(db, pocket.readName!, pocket)[0].card)}>
+                  It’s {db.names[pocket.readName]}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
         {pocket.ghost && (
           <div className="notice" style={{ marginTop: 12, marginBottom: 0 }}>
             This card was seen through an empty sleeve. It's recorded on the page where it actually is, not here. If it really is in
@@ -352,7 +384,7 @@ function PocketSheet({ db, live, pocket, onChange, onReadName, onClose }: SheetP
               return (
                 <li key={n} className="tap" onClick={() => { choose(best.card); setQuery(''); }}>
                   <div className="grow ellipsis">{db.names[n]}</div>
-                  <span className="muted small">{db.printings[n].length} printing{db.printings[n].length === 1 ? '' : 's'}</span>
+                  <span className="muted small">{db.printingsOf(n).length} printing{db.printingsOf(n).length === 1 ? '' : 's'}</span>
                 </li>
               );
             })}
