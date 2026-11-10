@@ -33,6 +33,8 @@ export interface RecognizeConfig {
    * False reproduces the old detail-only test (for comparisons).
    */
   matchLowDetail: boolean;
+  /** Cut the title-line crop (for reading the name) for every card, not only those the image match didn't settle. */
+  nameCropAll?: boolean;
 }
 
 export const DEFAULT_RECOGNIZE: RecognizeConfig = {
@@ -268,7 +270,7 @@ export function recognizePocket(pc: PocketCrop, idx: MatchIndex, cfg: RecognizeC
   // Crops from the full-resolution frame (sharper than the pocket crop): the title line for OCR, the set symbol for printings.
   const regionOf = (r: readonly [number, number, number, number]): Rect => ({ x: bestWindow.x + bestWindow.w * r[0], y: bestWindow.y + bestWindow.h * r[1], w: bestWindow.w * (r[2] - r[0]), h: bestWindow.h * (r[3] - r[1]) });
   let nameCrop: RGBAImage | undefined;
-  if (status !== 'matched') nameCrop = warpQuad(pc.frame, mapRect(H, regionOf(REGION.name)), NAME_W, NAME_H);
+  if (status !== 'matched' || cfg.nameCropAll) nameCrop = warpQuad(pc.frame, mapRect(H, regionOf(REGION.name)), NAME_W, NAME_H);
   const symbolCrop = status !== 'unknown' ? warpQuad(pc.frame, mapRect(H, regionOf(SYMBOL_REGION)), SYMBOL_W, SYMBOL_H) : undefined;
   return {
     page: pc.page,
