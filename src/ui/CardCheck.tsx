@@ -4,7 +4,7 @@
 // side by side; Save + continue moves to the next card.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatUSD, type CardDB, type Finish } from '../core/carddb.ts';
-import { approveEmpty, approvePocket, cardOptions, nameUnsure, pocketPrice, type LivePrices, type PocketView } from '../app/session.ts';
+import { approveEmpty, approvePocket, cardOptions, finishFor, nameUnsure, pocketPrice, type LivePrices, type PocketView } from '../app/session.ts';
 import { scryfallImage } from '../app/prices.ts';
 import { SYMBOL_REGION } from '../core/symbol.ts';
 
@@ -51,7 +51,7 @@ export function CardCheck({ db, live, pocket, location, position, onSave, onBack
   const info = option !== null ? db.info(option) : null;
   const current = pocket.chosen !== null ? db.info(pocket.chosen) : null;
   const [finish, setFinish] = useState<Finish>(pocket.finish);
-  const optionFinish: Finish = info ? (info.finishes.includes(finish) ? finish : info.finishes[0]) : finish;
+  const optionFinish: Finish = info ? finishFor(db, info.index, finish) : finish;
   const results = query.trim().length >= 2 ? db.searchNames(query, 8) : [];
 
   // A new card (or a search): start from the first option.
@@ -207,7 +207,11 @@ export function CardCheck({ db, live, pocket, location, position, onSave, onBack
         <tbody>
           {row('Name', current ? `${current.name}${unsure ? '?' : ''}` : pocket.status === 'unknown' ? 'Not identified' : '—', info?.name ?? '—')}
           {row('Edition', edition(current), edition(info))}
-          {row('Price', price(pocket.chosen, pocket.finish), price(info?.index ?? null, optionFinish))}
+          {row(
+            'Price',
+            price(pocket.chosen, pocket.chosen === null ? pocket.finish : finishFor(db, pocket.chosen, pocket.finish)),
+            price(info?.index ?? null, optionFinish),
+          )}
         </tbody>
       </table>
 

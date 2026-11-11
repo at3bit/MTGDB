@@ -113,3 +113,15 @@ describe('card-by-card check', () => {
     expect(checkList(spreads)).toEqual([{ spread: spreads[0].id, page: 0, slot: 0 }]);
   });
 });
+
+describe('finishes', () => {
+  it('a foil-only printing is priced and saved as foil, even if scanned as regular', async () => {
+    const { cardPrice, finishFor } = await import('../src/app/session.ts');
+    const foilRows: CardRow[] = [['id-f', 'Promo Thing', 'pr', '1s', 'rare', 2, null, 3.5, null]];
+    const fdb = new CardDB({ v: 1, built: '2026-01-01', source: 't', sets: { pr: 'Promos' }, cards: foilRows }, decodeFingerprints(encodeFingerprints(new Uint32Array(FP_WORDS), 1).buffer as ArrayBuffer));
+    expect(finishFor(fdb, 0, 'nonfoil')).toBe('foil');
+    expect(cardPrice(fdb, 0, 'nonfoil')).toBe(3.5);
+    const spreads = addReading([], { pockets: [pocket(0)], time: 0, change: Infinity, manual: false }, 1, fdb);
+    expect(binderEntries(spreads, 1, fdb)[0].finish).toBe('foil');
+  });
+});

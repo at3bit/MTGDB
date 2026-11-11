@@ -115,7 +115,7 @@ export function settlePrinting(p: PocketView, db: CardDB): PocketView {
   if (p.chosen === null || p.via === 'manual') return p;
   const choice = resolvePrinting(db, db.nameOf[p.chosen], p.query, p.borderLuma);
   // The name stays as sure as it was; an ambiguous printing is flagged separately (printingCheck).
-  return { ...p, chosen: choice.card, printingCheck: choice.ambiguous, ties: choice.ambiguous ? choice.ties.map((t) => t.card) : undefined };
+  return { ...p, chosen: choice.card, finish: finishFor(db, choice.card, p.finish), printingCheck: choice.ambiguous, ties: choice.ambiguous ? choice.ties.map((t) => t.card) : undefined };
 }
 
 /** One capture of a spread, as it arrives from the recognizer. */
@@ -291,10 +291,10 @@ export function binderEntries(spreads: Spread[], _pagesPerSpread: number, db: Ca
   spreads.forEach((s, si) => {
     for (const p of [...s.pockets].sort((a, b) => a.page - b.page || a.slot - b.slot)) {
       if (p.chosen === null || p.ghost || p.cardBack || nameUnsure(p)) continue;
-      const key = `${db.info(p.chosen).id}:${p.finish}`;
+      const key = `${db.info(p.chosen).id}:${finishFor(db, p.chosen, p.finish)}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push({ flagged: needsCheck(p), spreadId: s.id, spreadIndex: si, page: p.page, slot: p.slot, card: p.chosen, finish: p.finish, status: p.status });
+      out.push({ flagged: needsCheck(p), spreadId: s.id, spreadIndex: si, page: p.page, slot: p.slot, card: p.chosen, finish: finishFor(db, p.chosen, p.finish), status: p.status });
     }
   });
   return out;
@@ -361,11 +361,18 @@ export function pocketPrice(db: CardDB, p: { chosen: number | null; finish: Fini
 
 export type LivePrices = Record<string, { nonfoil: number | null; foil: number | null; etched: number | null; at: string }>;
 
+/** The finish asked for if the printing exists in it, else the printing's own (e.g. a foil-only promo). */
+export function finishFor(db: CardDB, card: number, wanted: Finish): Finish {
+  const fins = db.info(card).finishes;
+  return fins.includes(wanted) || !fins.length ? wanted : fins[0];
+}
+
 export function cardPrice(db: CardDB, card: number, finish: Finish, live?: LivePrices): number | null {
   const info = db.info(card);
+  const f = finishFor(db, card, finish);
   const l = live?.[info.id];
-  if (l && l.at > db.file.built) return l[finish] ?? null;
-  return info.prices[finish] ?? null;
+  if (l && l.at > db.file.built) return l[f] ?? null;
+  return info.prices[f] ?? null;
 }
 
 export function spreadTotal(db: CardDB, s: Spread, live?: LivePrices): number {
