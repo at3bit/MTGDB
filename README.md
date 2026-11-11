@@ -90,10 +90,20 @@ link. Each person's collection is stored only on their own phone.
    an English printing, so a photo of an English card could come back as, say,
    the Japanese one. Matching and printing choices skip them unless the box is
    unticked.
-9. **Review.** Green pockets were identified. Orange means check it, red means
+9. **Check, card by card** (`src/ui/CardCheck.tsx`). When a scan finishes, the
+   app opens a check of every card before anything is saved: your photo next
+   to the proposed match, with name, edition and price side by side ("Scanned
+   as" vs. "This option"). Swipe the match (or tap ‹ ›) through the likely
+   options: other printings of that card, most alike first, then other cards
+   it looks like. If it's way off, search the name at the top and swipe its
+   printings. Pick the finish, compare set symbols, then **Save + continue**;
+   **‹ Back** returns to the previous card. You can stop any time (‹ Pages),
+   pick up again with **Check cards**, or tap any card on the pages to check
+   just that one. Checked cards are marked ✓.
+10. **Review.** Green pockets were identified. Orange means check it, red means
    not identified (no guess is shown). A name the app isn't sure of is shown
    as a question ("Lightning Bolt?") and isn't saved or counted until you
-   confirm it or pick the right card. Tap any pocket to compare your photo with the match, switch
+   check it. Tap any pocket to compare your photo with the match, switch
    printing or foil, or search by name. Switch between the page-by-page
    gallery and a list, sort by price, 30-day gain or drop, name or set, and
    search by name.

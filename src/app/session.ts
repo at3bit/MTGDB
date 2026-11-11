@@ -44,6 +44,8 @@ export interface PocketView {
   nameCheck?: 'agrees' | 'differs' | 'unread';
   /** Card name (index into CardDB.names) read from the card when it differs from the match, or a weak read offered as a suggestion. */
   readName?: number;
+  /** Checked by the user in the card-by-card approval step. */
+  approved?: boolean;
   /**
    * The card was seen through an empty sleeve: it's really on a neighbouring
    * sheet, where it's recorded. Not counted or saved here. Recomputed after
@@ -371,3 +373,76 @@ export function spreadTotal(db: CardDB, s: Spread, live?: LivePrices): number {
 }
 
 export const ACCEPT = DEFAULT_RECOGNIZE;
+
+/** A pocket's address in the scan. */
+export interface PocketKey {
+  spread: number;
+  page: number;
+  slot: number;
+}
+
+/**
+ * The cards to check one by one, in binder order: every pocket that holds a card (not empty sleeves,
+ * card backs, or cards seen through a sleeve, which are recorded on their own page). `onlyToCheck`
+ * keeps just the ones the app wasn't sure of.
+ */
+export function checkList(spreads: Spread[], onlyToCheck = false): PocketKey[] {
+  const out: PocketKey[] = [];
+  for (const s of spreads) {
+    for (const p of [...s.pockets].sort((a, b) => a.page - b.page || a.slot - b.slot)) {
+      if (p.ghost || p.cardBack || p.status === 'empty') continue;
+      if (onlyToCheck && !needsCheck(p)) continue;
+      out.push({ spread: s.id, page: p.page, slot: p.slot });
+    }
+  }
+  return out;
+}
+
+export function findPocket(spreads: Spread[], k: PocketKey): PocketView | undefined {
+  return spreads.find((s) => s.id === k.spread)?.pockets.find((p) => p.page === k.page && p.slot === k.slot);
+}
+
+/** At most this many printings of one name are offered to swipe through (most alike first). */
+const MAX_PRINTINGS = 30;
+
+/**
+ * Options to swipe through for a pocket, best first: its current pick, the other printings of that name
+ * (the most alike to the photo first), the name read from the card, then the other cards it looks like.
+ * With `nameIdx` (a searched name): that name's printings only.
+ */
+export function cardOptions(db: CardDB, p: PocketView, nameIdx?: number): number[] {
+  const out: number[] = [];
+  const seen = new Set<number>();
+  const add = (c: number | undefined) => {
+    if (c === undefined || c < 0 || seen.has(c) || (db.allowed && !db.allowed[c] && c !== p.chosen)) return;
+    seen.add(c);
+    out.push(c);
+  };
+  const printingsOf = (n: number) => rankPrintings(db, n, p).slice(0, MAX_PRINTINGS).map((r) => r.card);
+  if (nameIdx !== undefined) {
+    printingsOf(nameIdx).forEach(add);
+    return out;
+  }
+  if (p.chosen !== null) add(p.chosen);
+  const name = p.chosen !== null ? db.nameOf[p.chosen] : p.matches[0] ? db.nameOf[p.matches[0].card] : -1;
+  if (name >= 0) printingsOf(name).forEach(add);
+  if (p.readName !== undefined && p.readName !== name) add(printingsOf(p.readName)[0]);
+  const names = new Set(out.map((c) => db.nameOf[c]));
+  for (const m of p.matches) {
+    const n = db.nameOf[m.card];
+    if (names.has(n)) continue;
+    names.add(n);
+    add(printingsOf(n)[0] ?? m.card);
+  }
+  return out;
+}
+
+/** The user checked this pocket: it holds `card` (in `finish`). Their word is final. */
+export function approvePocket(p: PocketView, card: number, finish: Finish): PocketView {
+  return { ...p, chosen: card, finish, status: 'matched', via: 'manual', approved: true, printingCheck: false, seeThrough: false, ghost: false, cardBack: false };
+}
+
+/** The user says this sleeve is empty. */
+export function approveEmpty(p: PocketView): PocketView {
+  return { ...p, chosen: null, status: 'empty', via: 'manual', approved: true, printingCheck: false, seeThrough: false };
+}

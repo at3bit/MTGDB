@@ -190,6 +190,11 @@ try {
   await page.screenshot({ path: join(out, '4-running.png') });
   await page.getByText('Review “Trade Binder”').waitFor({ timeout: 120000 });
   console.log(`processed in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+  // The card-by-card check opens by itself after a scan; look at the pages first.
+  await page.getByRole('heading', { name: /^Card 1 of \d+$/ }).waitFor({ timeout: 10000 });
+  check(true, `card-by-card check opened after the scan (${await page.getByRole('heading', { name: /^Card 1 of \d+$/ }).textContent()})`);
+  await page.screenshot({ path: join(out, '5-check.png') });
+  await page.getByRole('button', { name: '‹ Pages' }).click();
   await page.waitForTimeout(500);
   await page.screenshot({ path: join(out, '5-review.png'), fullPage: true });
 
@@ -220,12 +225,31 @@ try {
     `diagnostics zip: ${photos.length} photos, ${manifest.readings.length} readings, video ${manifest.info.video}, focus per page recorded`,
   );
 
-  // Open a pocket, then save.
-  await page.locator('.tile').nth(1).click();
-  await page.getByRole('dialog').waitFor();
-  await page.screenshot({ path: join(out, '6-sheet.png') });
-  await page.getByRole('button', { name: 'Done' }).click();
-  await page.getByRole('button', { name: 'Save binder' }).click();
+  // Check cards one by one: browse the options, search a name, save and continue, go back.
+  await page.getByRole('button', { name: /^Check cards/ }).click();
+  const heading = page.getByRole('heading', { name: /^Card \d+ of \d+$/ });
+  const optionName = () => page.locator('.cmp-table tbody tr').first().locator('td').nth(1).textContent();
+  const first = await optionName();
+  await page.getByRole('button', { name: 'Next option' }).click();
+  const second = await optionName();
+  await page.getByRole('button', { name: 'Previous option' }).click();
+  check(first === expected[0] && second !== first && (await optionName()) === first, `swiping options: "${first}" -> "${second}" -> back`);
+  await page.screenshot({ path: join(out, '6-check-card.png') });
+  await page.getByRole('button', { name: 'Save + continue' }).click();
+  const at2 = await heading.textContent();
+  // Card 2: search its name (as if the app had missed it) and pick it.
+  await page.getByLabel('Search card name').fill(expected[1].slice(0, -1));
+  await page.locator('.check-results li', { hasText: expected[1] }).click();
+  const picked = await optionName();
+  await page.getByRole('button', { name: 'Save + continue' }).click();
+  const at3 = await heading.textContent();
+  await page.getByRole('button', { name: '‹ Back' }).click();
+  const back = await heading.textContent();
+  check(/^Card 2 of/.test(at2 ?? '') && picked === expected[1] && /^Card 3 of/.test(at3 ?? '') && /^Card 2 of/.test(back ?? ''), `save + continue / search / back: ${at2} -> picked "${picked}" -> ${at3} -> back to ${back}`);
+  await page.getByRole('button', { name: '‹ Pages' }).click();
+  const ticks = await page.locator('.tile .name', { hasText: '✓' }).count();
+  check(ticks === 2 && (await page.getByRole('button', { name: /^Check cards \(2\// }).count()) === 1, `checked cards marked on the pages (${ticks}) and counted`);
+  await page.getByRole('button', { name: /^(Save now|Save binder)$/ }).click();
   await page.getByRole('button', { name: 'Export CSV' }).waitFor({ timeout: 10000 });
   await page.screenshot({ path: join(out, '7-binder-gallery.png'), fullPage: true });
   const identified = tiles.filter((t) => !['Empty', 'Not identified', 'Check', '—'].includes(t.name) && !t.name.endsWith('?')).length;
@@ -261,6 +285,7 @@ try {
   await page.waitForTimeout(500);
   await page.getByRole('button', { name: 'Process video' }).click();
   await page.getByText('Review “Quick Flips”').waitFor({ timeout: 120000 });
+  await page.getByRole('button', { name: '‹ Pages' }).click({ timeout: 10000 });
   await page.waitForTimeout(500);
   await page.screenshot({ path: join(out, '9-quick-flips.png'), fullPage: true });
   const fastSpreads = await page.locator('strong', { hasText: /^Spread \d+$/ }).count();
@@ -279,6 +304,9 @@ try {
     await page.getByRole('button', { name: 'Process video' }).click();
   };
   const reviewed = async () => {
+    // Close the card-by-card check that opens after a scan, to read the pages.
+    const pages = page.getByRole('button', { name: '‹ Pages' });
+    if (await pages.count()) await pages.click();
     const spreads = await page.locator('strong', { hasText: /^Spread \d+$/ }).count();
     const names: string[] = await page.locator('.tile').evaluateAll((els: Element[]) => els.map((e) => e.querySelector('.name')?.textContent ?? ''));
     return { spreads, right: names.filter((n, i) => n === expected[i]).length, total: names.length };

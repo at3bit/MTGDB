@@ -1,31 +1,13 @@
 // Results of a run: every spread, page by page (or as a sortable, searchable
-// list / gallery), with a fix-up sheet per pocket.
+// list / gallery), and the card-by-card check (CardCheck) before saving.
 import { useMemo, useState } from 'react';
 import { diagnostics, shareDiagnostics } from '../app/diagnostics.ts';
-import { formatUSD, type CardDB, type Finish } from '../core/carddb.ts';
+import { formatUSD, type CardDB } from '../core/carddb.ts';
 import type { Baselines } from '../core/baselines.ts';
-import { binderEntries, nameUnsure, needsCheck, pocketPrice, rankPrintings, spreadTotal, type LivePrices, type PocketView, type Spread } from '../app/session.ts';
+import { binderEntries, checkList, findPocket, nameUnsure, needsCheck, pocketPrice, spreadTotal, type PocketKey, type LivePrices, type PocketView, type Spread } from '../app/session.ts';
 import { trendFor, type PriceHistory } from '../app/store.ts';
-import { scryfallImage } from '../app/prices.ts';
 import { CardsView, type CardItem } from './CardsView.tsx';
-import { SYMBOL_REGION } from '../core/symbol.ts';
-
-/** The set-symbol area of a printing's Scryfall image, zoomed with CSS (no extra download beyond the image). */
-function SymbolZoom({ id }: { id: string }) {
-  const [x0, y0, x1, y1] = SYMBOL_REGION;
-  const w = x1 - x0, h = y1 - y0;
-  return (
-    <span
-      className="symbol-zoom"
-      title="This printing's set symbol"
-      style={{
-        backgroundImage: `url(${scryfallImage(id, 'normal')})`,
-        backgroundSize: `${100 / w}% ${100 / h}%`,
-        backgroundPosition: `${(x0 / (1 - w)) * 100}% ${(y0 / (1 - h)) * 100}%`,
-      }}
-    />
-  );
-}
+import { CardCheck } from './CardCheck.tsx';
 
 interface Props {
   db: CardDB;
@@ -41,6 +23,8 @@ interface Props {
   onReadName: (spreadId: number, pocket: PocketView) => void;
   onSave: () => void;
   onDiscard: () => void;
+  /** Start the card-by-card check straight away (right after a scan). */
+  checkOnOpen?: boolean;
 }
 
 /** What a pocket tile says when it isn't showing a card name. */
@@ -55,7 +39,8 @@ function pocketLabel(p: PocketView): string {
 function tileName(db: CardDB, p: PocketView): string {
   if (p.ghost) return 'Seen through sleeve';
   if (p.chosen === null || p.cardBack) return pocketLabel(p);
-  return nameUnsure(p) ? `${db.info(p.chosen).name}?` : db.info(p.chosen).name;
+  if (nameUnsure(p)) return `${db.info(p.chosen).name}?`;
+  return p.approved ? `✓ ${db.info(p.chosen).name}` : db.info(p.chosen).name;
 }
 
 function pocketClass(p: PocketView): string {
@@ -65,9 +50,20 @@ function pocketClass(p: PocketView): string {
   return needsCheck(p) ? 'uncertain' : 'matched';
 }
 
-export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, history, baselines, ocrPending, runStats, onUpdate, onReadName, onSave, onDiscard }: Props) {
+export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, history, baselines, ocrPending, runStats, onUpdate, onReadName, onSave, onDiscard, checkOnOpen }: Props) {
   const [sharing, setSharing] = useState(false);
-  const [open, setOpen] = useState<{ spread: number; page: number; slot: number } | null>(null);
+  /** The card-by-card check: the pockets being checked and which one is showing (index === length: all done). */
+  const [check, setCheck] = useState<{ keys: PocketKey[]; i: number; single: boolean } | null>(() => {
+    if (!checkOnOpen) return null;
+    const keys = checkList(spreads);
+    return keys.length ? { keys, i: 0, single: false } : null;
+  });
+  const openOne = (k: PocketKey) => setCheck({ keys: [k], i: 0, single: true });
+  const startCheck = () => {
+    const keys = checkList(spreads);
+    const first = keys.findIndex((k) => !findPocket(spreads, k)?.approved);
+    setCheck({ keys, i: Math.max(0, first), single: false });
+  };
   // What saving would store: one entry per printing, without see-through cards and card backs.
   const entries = useMemo(() => binderEntries(spreads, pagesPerSpread, db), [spreads, pagesPerSpread, db]);
   const total = entries.reduce((t, e) => t + (pocketPrice(db, { chosen: e.card, finish: e.finish }, live) ?? 0), 0);
@@ -84,7 +80,11 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
     );
     return c;
   }, [spreads]);
-  const current = open && spreads.find((s) => s.id === open.spread)?.pockets.find((p) => p.page === open.page && p.slot === open.slot);
+  const toCheck = useMemo(() => checkList(spreads), [spreads]);
+  const checked = toCheck.filter((k) => findPocket(spreads, k)?.approved).length;
+  const checking = check && check.i < check.keys.length ? check.keys[check.i] : null;
+  const checkingPocket = checking ? findPocket(spreads, checking) : undefined;
+  const spreadIndex = (id: number) => spreads.findIndex((s) => s.id === id);
   const pageName = (si: number, page: number) => `Page ${si * pagesPerSpread + page + 1}${pagesPerSpread === 2 ? (page === 0 ? ' (left)' : ' (right)') : ''}`;
 
   const items: CardItem[] = useMemo(
@@ -107,7 +107,7 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
               thumb: p.thumbUrl,
               flagged: needsCheck(p),
               note: unsure ? `${p.chosen !== null ? db.info(p.chosen).name : 'Name'}? Tap to confirm` : p.printingCheck ? 'Which printing?' : p.seeThrough ? 'Through a sleeve?' : undefined,
-              onOpen: () => setOpen({ spread: s.id, page: p.page, slot: p.slot }),
+              onOpen: () => openOne({ spread: s.id, page: p.page, slot: p.slot }),
             };
           }),
       ),
@@ -134,7 +134,7 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
                   .map((p) => {
                     const info = p.chosen !== null && !p.cardBack ? db.info(p.chosen) : null;
                     return (
-                      <button key={p.slot} className={`tile ${pocketClass(p)}`} onClick={() => setOpen({ spread: s.id, page: p.page, slot: p.slot })}>
+                      <button key={p.slot} className={`tile ${pocketClass(p)}`} onClick={() => openOne({ spread: s.id, page: p.page, slot: p.slot })}>
                         <img src={p.thumbUrl} alt={info?.name ?? 'pocket'} />
                         <div className="name">{tileName(db, p)}</div>
                         {!p.ghost && p.printingCheck && <div className="price" style={{ color: 'var(--warn)' }}>Which printing?</div>}
@@ -203,15 +203,35 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
       ) : (
         <CardsView db={db} items={items} storageKey="review" orderGallery={pageGrids} />
       )}
-      {current && open && (
-        <PocketSheet
+      {check && checking && checkingPocket && (
+        <CardCheck
           db={db}
           live={live}
-          pocket={current}
-          onChange={(p) => onUpdate(open.spread, p)}
-          onReadName={() => onReadName(open.spread, current)}
-          onClose={() => setOpen(null)}
+          pocket={checkingPocket}
+          location={`${pageName(spreadIndex(checking.spread), checking.page)} · slot ${checking.slot + 1}`}
+          position={check.single ? null : { index: check.i + 1, total: check.keys.length }}
+          onSave={(p) => {
+            onUpdate(checking.spread, p);
+            setCheck(check.single ? null : { ...check, i: check.i + 1 });
+          }}
+          onBack={() => setCheck(check.i > 0 && !check.single ? { ...check, i: check.i - 1 } : null)}
+          onClose={() => setCheck(null)}
+          onReadName={() => onReadName(checking.spread, checkingPocket)}
         />
+      )}
+      {check && !checking && (
+        <div className="check" role="dialog" aria-label="All cards checked">
+          <div className="check-done">
+            <h2>All {check.keys.length} cards checked</h2>
+            <div className="big-number">{formatUSD(total)}</div>
+            <p className="muted">{entries.length} card{entries.length === 1 ? '' : 's'} will be saved to “{binder}”.</p>
+            <div className="stack">
+              <button className="btn primary block" onClick={onSave}>Save binder</button>
+              <button className="btn block" onClick={() => setCheck({ ...check, i: check.keys.length - 1 })}>‹ Back to the last card</button>
+              <button className="btn block" onClick={() => setCheck(null)}>See the pages</button>
+            </div>
+          </div>
+        </div>
       )}
       <div className="savebar">
         <div>
@@ -219,185 +239,22 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
             <div className="num" style={{ fontWeight: 700 }}>{formatUSD(total)}</div>
             <div className="muted small">{counts.check > 0 ? `${counts.check} to check (orange/red)` : 'All pockets identified'}</div>
           </div>
-          <button className="btn primary" onClick={onSave} disabled={!spreads.length}>
-            Save binder
-          </button>
+          {checked < toCheck.length ? (
+            <>
+              <button className="btn small" onClick={onSave} disabled={!spreads.length}>
+                Save now
+              </button>
+              <button className="btn primary" onClick={startCheck}>
+                Check cards ({checked}/{toCheck.length})
+              </button>
+            </>
+          ) : (
+            <button className="btn primary" onClick={onSave} disabled={!spreads.length}>
+              Save binder
+            </button>
+          )}
         </div>
       </div>
     </div>
-  );
-}
-
-interface SheetProps {
-  db: CardDB;
-  live: LivePrices;
-  pocket: PocketView;
-  onChange: (p: PocketView) => void;
-  onReadName: () => void;
-  onClose: () => void;
-}
-
-function PocketSheet({ db, live, pocket, onChange, onReadName, onClose }: SheetProps) {
-  const [query, setQuery] = useState('');
-  const info = pocket.chosen !== null ? db.info(pocket.chosen) : null;
-  const choose = (card: number) => {
-    const fin = db.info(card).finishes;
-    onChange({ ...pocket, chosen: card, status: 'matched', via: 'manual', printingCheck: false, ghost: false, seeThrough: false, cardBack: false, finish: fin.includes(pocket.finish) ? pocket.finish : fin[0] });
-  };
-  const printings = info ? rankPrintings(db, db.nameOf[info.index], pocket).slice(0, 30) : [];
-  const otherNames: number[] = [];
-  for (const m of pocket.matches) {
-    const n = db.nameOf[m.card];
-    if ((!info || n !== db.nameOf[info.index]) && !otherNames.some((c) => db.nameOf[c] === n)) otherNames.push(m.card);
-    if (otherNames.length >= 6) break;
-  }
-  const results = query.length >= 2 ? db.searchNames(query, 12) : [];
-
-  return (
-    <>
-      <div className="sheet-backdrop" onClick={onClose} />
-      <div className="sheet" role="dialog" aria-label="Pocket details">
-        <div className="compare">
-          <figure>
-            <img src={pocket.thumbUrl} alt="photo" />
-            <figcaption>Your card</figcaption>
-          </figure>
-          <figure>
-            {info ? <img src={scryfallImage(info.id)} alt={info.name} /> : <div style={{ aspectRatio: '63/88', background: '#000', borderRadius: 8 }} />}
-            <figcaption>{info ? 'Match' : 'No match'}</figcaption>
-          </figure>
-        </div>
-        {info ? (
-          <>
-            <h3>{info.name}</h3>
-            <div className="muted small">
-              {info.setName} ({info.set.toUpperCase()}) · #{info.cn} · {info.rarity}
-            </div>
-            <div className="row spread" style={{ marginTop: 10 }}>
-              <div className="seg">
-                {info.finishes.map((f: Finish) => (
-                  <button key={f} className={pocket.finish === f ? 'on' : ''} onClick={() => onChange({ ...pocket, finish: f, via: pocket.via === 'image' ? 'image' : pocket.via })}>
-                    {f === 'nonfoil' ? 'Regular' : f === 'foil' ? 'Foil' : 'Etched'}
-                  </button>
-                ))}
-              </div>
-              <div className="big-number" style={{ fontSize: 24 }}>{formatUSD(pocketPrice(db, pocket, live))}</div>
-            </div>
-          </>
-        ) : (
-          <h3>{pocket.status === 'empty' ? 'Empty pocket' : 'Not identified'}</h3>
-        )}
-        {pocket.ocrText != null && <div className="muted small" style={{ marginTop: 6 }}>Name read as “{pocket.ocrText || '…'}”</div>}
-        {(nameUnsure(pocket) || (pocket.chosen === null && pocket.readName !== undefined)) && (
-          <div className="notice" style={{ marginTop: 12, marginBottom: 0 }}>
-            {pocket.nameCheck === 'differs' && pocket.readName !== undefined
-              ? `The picture looks like ${info?.name ?? 'another card'}, but the name on the card reads as ${db.names[pocket.readName]}. Which is it?`
-              : info
-                ? `Not sure this is ${info.name}. It isn't saved or counted until you confirm it or pick the right card below.`
-                : `The name might be ${db.names[pocket.readName!]}.`}
-            <div className="row" style={{ marginTop: 10, gap: 8, flexWrap: 'wrap' }}>
-              {info && nameUnsure(pocket) && (
-                <button className="btn small" onClick={() => onChange({ ...pocket, status: 'matched', via: 'manual', nameCheck: undefined })}>
-                  It’s {info.name}
-                </button>
-              )}
-              {pocket.readName !== undefined && pocket.readName !== (info ? db.nameOf[info.index] : -1) && (
-                <button className="btn small" onClick={() => choose(rankPrintings(db, pocket.readName!, pocket)[0].card)}>
-                  It’s {db.names[pocket.readName]}
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-        {pocket.ghost && (
-          <div className="notice" style={{ marginTop: 12, marginBottom: 0 }}>
-            This card was seen through an empty sleeve. It's recorded on the page where it actually is, not here. If it really is in
-            this sleeve, tap it in the list below to keep it here too.
-          </div>
-        )}
-        {pocket.seeThrough && (
-          <div className="notice" style={{ marginTop: 12, marginBottom: 0 }}>
-            This card looks hazier than the others on its page, as if it's behind an empty sleeve. If the sleeve is empty, tap Mark empty.
-          </div>
-        )}
-        {pocket.cardBack && <div className="muted small" style={{ marginTop: 6 }}>This sleeve shows the back of a card (in the sleeve's other side), so it's treated as empty.</div>}
-        {pocket.printingCheck && (
-          <div className="notice" style={{ marginTop: 12, marginBottom: 0 }}>
-            Several printings of this card look the same from the front but are priced differently. Check the set symbol, border and
-            corners, then tap the right one below (or tap the current one to confirm it).
-          </div>
-        )}
-
-        {printings.length > 1 && (
-          <>
-            <h4>Other printings</h4>
-            {pocket.symbolUrl && (
-              <div className="row small muted" style={{ marginBottom: 6 }}>
-                <img className="symbol-zoom" src={pocket.symbolUrl} alt="Set symbol on your card" />
-                <span>Your card’s set symbol. Compare it with each printing’s (right).</span>
-              </div>
-            )}
-            <ul className="list">
-              {printings.map(({ card }, i) => {
-                const p = db.info(card);
-                return (
-                  <li key={card} className="tap" onClick={() => choose(card)}>
-                    <img className="mini" src={scryfallImage(p.id, 'small')} alt="" loading="lazy" />
-                    <div className="grow">
-                      <div className="ellipsis">{p.setName}</div>
-                      <div className="muted small">#{p.cn} · {p.set.toUpperCase()}</div>
-                    </div>
-                    <span className="num">{formatUSD(p.prices.nonfoil ?? p.prices.foil)}</span>
-                    {pocket.symbolUrl && i < 6 && <SymbolZoom id={p.id} />}
-                    {card === pocket.chosen && <span className="badge ok">✓</span>}
-                  </li>
-                );
-              })}
-            </ul>
-          </>
-        )}
-
-        {otherNames.length > 0 && (
-          <>
-            <h4>Looks like</h4>
-            <ul className="list">
-              {otherNames.map((card) => {
-                const p = db.info(card);
-                return (
-                  <li key={card} className="tap" onClick={() => choose(card)}>
-                    <img className="mini" src={scryfallImage(p.id, 'small')} alt="" loading="lazy" />
-                    <div className="grow ellipsis">{p.name}</div>
-                    <span className="muted small">{p.set.toUpperCase()}</span>
-                  </li>
-                );
-              })}
-            </ul>
-          </>
-        )}
-
-        <h4>Search</h4>
-        <input type="search" placeholder="Type a card name" value={query} onChange={(e) => setQuery(e.target.value)} />
-        {results.length > 0 && (
-          <ul className="list">
-            {results.map((n) => {
-              const best = rankPrintings(db, n, pocket)[0];
-              return (
-                <li key={n} className="tap" onClick={() => { choose(best.card); setQuery(''); }}>
-                  <div className="grow ellipsis">{db.names[n]}</div>
-                  <span className="muted small">{db.printingsOf(n).length} printing{db.printingsOf(n).length === 1 ? '' : 's'}</span>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-
-        <div className="row" style={{ marginTop: 16, flexWrap: 'wrap' }}>
-          {pocket.nameCrop && <button className="btn small" onClick={onReadName}>Read name again</button>}
-          <button className="btn small" onClick={() => onChange({ ...pocket, chosen: null, status: 'empty', via: 'manual', seeThrough: false })}>Mark empty</button>
-          <div className="grow" />
-          <button className="btn primary" onClick={onClose}>Done</button>
-        </div>
-      </div>
-    </>
   );
 }

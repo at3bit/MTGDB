@@ -97,6 +97,12 @@ try {
   await page.setInputFiles('[data-testid=video-input]', videoPath);
   await page.getByRole('button', { name: 'Process video' }).click({ timeout: 30000 });
   await page.getByText('Review “Smoke test”').waitFor({ timeout: 180000 });
+  // The card-by-card check opens straight after a scan.
+  await page.getByRole('dialog', { name: 'Check card' }).waitFor({ timeout: 10000 });
+  await page.waitForTimeout(2500); // let Scryfall images load
+  await page.screenshot({ path: join(out, 'check.png'), fullPage: false });
+  console.log(`card check: ${await page.getByRole('heading', { name: /^Card 1 of \d+$/ }).textContent()}`);
+  await page.getByRole('button', { name: '‹ Pages' }).click();
   await page.waitForTimeout(2000);
   await page.screenshot({ path: join(out, 'review.png'), fullPage: true });
   const tiles: { cls: string; name: string }[] = await page.locator('.tile').evaluateAll((els: Element[]) => els.map((e) => ({ cls: e.className, name: e.querySelector('.name')?.textContent ?? '' })));
@@ -114,11 +120,11 @@ try {
   const which = page.locator('.tile', { hasText: 'Which printing?' }).first();
   if (await which.count()) {
     await which.click();
-    await page.getByRole('dialog').waitFor();
+    await page.getByRole('dialog', { name: 'Check card' }).waitFor();
     await page.waitForTimeout(2500); // let Scryfall images load
     await page.screenshot({ path: join(out, 'which-printing.png'), fullPage: false });
-    console.log(`printing chooser: ${await page.locator('.sheet .symbol-zoom').count()} symbol crops shown`);
-    await page.getByRole('button', { name: 'Done' }).click();
+    console.log(`printing check: ${await page.locator('.check .symbol-zoom').count()} set-symbol crops (yours and the option's)`);
+    await page.getByRole('button', { name: '‹ Pages' }).click();
   }
   await page.getByRole('button', { name: 'List', exact: true }).click();
   await page.getByLabel('Sort by').selectOption('price');

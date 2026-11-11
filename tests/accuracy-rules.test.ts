@@ -6,7 +6,7 @@ import { FP_WORDS, fingerprint } from '../src/core/fingerprint.ts';
 import { defaultCalibration, outlineOf, withOutline, type Quad } from '../src/core/geometry.ts';
 import { recognizeSpread, type MatchIndex } from '../src/core/recognize.ts';
 import { recognizeTrackedSpread } from '../src/core/scan.ts';
-import { addReading, applyOcr, binderEntries, nameUnsure, type PocketView } from '../src/app/session.ts';
+import { addReading, applyOcr, approveEmpty, approvePocket, binderEntries, cardOptions, checkList, nameUnsure, type PocketView } from '../src/app/session.ts';
 import { makeCard, renderSpread, rng, toReferenceSize } from './synth.ts';
 
 const names = ['Lightning Bolt', 'Counterspell', 'Llanowar Elves', 'Serra Angel', 'Dark Ritual'];
@@ -93,5 +93,23 @@ describe('the outline stays put', () => {
     const tracked = recognizeTrackedSpread([scene.frame], scene.calibration, undefined, idx);
     expect(tracked.retried).toEqual([]);
     expect(tracked.calibration.pages).toEqual(scene.calibration.pages as Quad[]);
+  });
+});
+
+describe('card-by-card check', () => {
+  it('offers the current pick first, then look-alikes, without foreign printings', () => {
+    db.setEnglishOnly(true);
+    const p = { ...pocket(0), matches: [{ card: 0, d: 10 }, { card: 5, d: 10 }, { card: 1, d: 30 }, { card: 3, d: 40 }] };
+    expect(cardOptions(db, p)).toEqual([0, 1, 3]);
+    expect(cardOptions(db, p, db.nameOf[2])).toEqual([2]); // a searched name: its printings
+  });
+  it('a checked card is saved, even if the app was unsure; an emptied one is not', () => {
+    const unsure = applyOcr(pocket(0), 'Counterspell', db);
+    const fixed = approvePocket(unsure, 1, 'foil');
+    expect(fixed).toMatchObject({ chosen: 1, finish: 'foil', status: 'matched', approved: true });
+    const spreads = addReading([], { pockets: [fixed, { ...approveEmpty(pocket(2)), slot: 1 }], time: 0, change: Infinity, manual: false }, 1, db);
+    expect(binderEntries(spreads, 1, db).map((e) => e.card)).toEqual([1]);
+    // Checking lists cards only (not the emptied sleeve).
+    expect(checkList(spreads)).toEqual([{ spread: spreads[0].id, page: 0, slot: 0 }]);
   });
 });

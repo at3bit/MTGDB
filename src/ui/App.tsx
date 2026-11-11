@@ -18,7 +18,7 @@ type Screen =
   | { name: 'home' }
   | { name: 'setup' }
   | { name: 'scan'; binder: string; source: ScanSource }
-  | { name: 'review'; binder: string }
+  | { name: 'review'; binder: string; fresh?: boolean }
   | { name: 'binder'; binder: string }
   | { name: 'all'; query?: string };
 
@@ -228,7 +228,7 @@ export function App() {
           recognizer={recognizer.current}
           spreadsSoFar={spreads.length}
           onSpread={onSpread}
-          onDone={() => setScreen({ name: 'review', binder: screen.binder })}
+          onDone={() => setScreen({ name: 'review', binder: screen.binder, fresh: true })}
           onCancel={() => setScreen({ name: 'home' })}
         />
       )}
@@ -245,6 +245,7 @@ export function App() {
           baselines={baselines}
           onUpdate={updatePocket}
           onReadName={(_, p) => p.nameCrop && runOcr((p as KeyedPocket).key, p.nameCrop)}
+          checkOnOpen={!!screen.fresh}
           onSave={() => saveBinder(screen.binder)}
           onDiscard={() => {
             if (!spreads.length || confirm('Discard this scan?')) {
