@@ -36,7 +36,8 @@ const PHASE_TEXT: Record<RunStatus['phase'], string> = {
 const MODE_KEY = 'mtgdb-capture-mode';
 const SOUND_KEY = 'mtgdb-capture-sound';
 const INTERVAL_KEY = 'mtgdb-capture-interval';
-const LINEUP_KEY = 'mtgdb-lineup-each';
+// v2: stopping on each photo is now off unless chosen (it used to default to on).
+const LINEUP_KEY = 'mtgdb-lineup-each-v2';
 const read = (k: string, d: string) => {
   try {
     return localStorage.getItem(k) ?? d;
@@ -101,14 +102,14 @@ export function ScanScreen({ binder, source, recognizer, spreadsSoFar, onSpread,
     return m === 'manual' || m === 'timed' ? m : 'auto';
   });
   const [interval, setIntervalState] = useState(() => Number(read(INTERVAL_KEY, '4')) || 4);
-  const [lineUpEach, setLineUpEachState] = useState(() => read(LINEUP_KEY, 'on') === 'on');
+  const [lineUpEach, setLineUpEachState] = useState(() => read(LINEUP_KEY, 'off') === 'on');
   const [sound, setSoundState] = useState(() => read(SOUND_KEY, 'on') === 'on');
   const [flash, setFlash] = useState(0);
   const [openStep, setOpenStep] = useState<string | null>(null);
   const [slowOpen, setSlowOpen] = useState(false);
   const [attempt, setAttempt] = useState(0);
   /** Photos: the photo waiting to be lined up. */
-  const [lineUp, setLineUp] = useState<{ index: number; count: number; reason: 'each' | 'shape' } | null>(null);
+  const [lineUp, setLineUp] = useState<{ index: number; count: number; reason: 'paused' | 'each' | 'shape' } | null>(null);
   /** Captures where a page didn't read well with the outline and was found elsewhere. */
   const [shifted, setShifted] = useState(0);
   /** The cards turned out to be upside down (2) or sideways (1, 3) relative to the outline. */
@@ -391,7 +392,7 @@ export function ScanScreen({ binder, source, recognizer, spreadsSoFar, onSpread,
           {isPhotos && (
             <label className="row small" style={{ gap: 8 }}>
               <input type="checkbox" checked={lineUpEach} onChange={(e) => setLineUpEach(e.target.checked)} />
-              <span>Line up the outline on each photo <span className="muted">(for photos taken by hand; turn off if the phone was on a tripod)</span></span>
+              <span>Stop on each photo to adjust the outline <span className="muted">(only for photos taken by hand; otherwise this outline is used for every photo, and Pause &amp; adjust changes it)</span></span>
             </label>
           )}
           <p className="muted small" style={{ margin: 0 }}>
@@ -465,11 +466,13 @@ export function ScanScreen({ binder, source, recognizer, spreadsSoFar, onSpread,
           <p className="muted small" style={{ margin: 0 }}>
             {lineUp?.reason === 'shape'
               ? 'This photo is a different shape from the first one: drag the corners onto its cards.'
-              : lineUp
+              : lineUp?.reason === 'each'
                 ? 'Drag the corners onto the cards in this photo, then use it.'
-                : 'Drag the corners onto the cards as they sit now, then continue.'}
+                : isPhotos
+                  ? 'Drag the corners onto the cards in this photo. The outline is then used for this photo and all the ones after it.'
+                  : 'Drag the corners onto the cards as they sit now, then continue.'}
           </p>
-          <button className="btn primary block" onClick={resume}>{lineUp ? 'Use this photo' : 'Continue'}</button>
+          <button className="btn primary block" onClick={resume}>{lineUp?.reason === 'each' ? 'Use this photo' : 'Continue'}</button>
           {lineUp && <button className="btn block" onClick={skip}>Skip this photo</button>}
           <button className="btn block" onClick={finish}>Finish</button>
         </div>

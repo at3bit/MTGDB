@@ -133,10 +133,12 @@ link. Each person's collection is stored only on their own phone.
 ## Scanning controls
 
 - **Upload photos** (most accurate): pick all the photos at once, in page
-  order. Line up the outline on the first; with **Line up the outline on each
-  photo** (on by default, for photos taken by hand) the app stops on every
-  photo so you can adjust it, or skip the photo. A photo of a different shape
-  always stops for lining up.
+  order. Line up the outline on the first and tap Read: the whole batch runs
+  with that outline, without stopping. **Pause & adjust** stops on the next
+  photo; the outline you set then is used for it and every photo after it.
+  **Stop on each photo to adjust the outline** (off by default; for photos
+  taken by hand) stops on every photo instead, with Use this photo / Skip. A
+  photo of a different shape (portrait vs landscape) always stops.
 - **Live camera**: capture pages **Automatically** (a quarter-second pause per
   spread is enough; half a second is safer), **On a timer** (a shot every 3-8 s
   with a countdown, a click and a flash: turn the page after each), or **When I

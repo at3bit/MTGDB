@@ -42,8 +42,11 @@ export interface RunEvents {
   captured?(how: 'auto' | 'manual'): void;
   /** The frames of a capture, just before they're sent to be read (for diagnostics). */
   sent?(f: SentFrames): void;
-  /** Photos: the run is waiting for the outline to be lined up on photo `index` (resume() to use it, skip() to leave it out). */
-  lineUp?(index: number, count: number, reason: 'each' | 'shape'): void;
+  /**
+   * Photos: the run is waiting for the outline to be lined up on photo `index` (resume() to use it, skip() to
+   * leave it out): because the user paused, because every photo is lined up, or because this one is a different shape.
+   */
+  lineUp?(index: number, count: number, reason: 'paused' | 'each' | 'shape'): void;
   spread(r: SpreadReading & { time: number; change: number; manual: boolean }): void;
   error(e: Error): void;
 }
@@ -64,7 +67,7 @@ export class RunController {
   private jobs: Promise<void>[] = [];
   private bounds = { x0: 0, y0: 0, x1: 1, y1: 1 };
   private patches: FocusPatch[] = [];
-  /** Photos: wait for the user to line up the outline on every photo, not just the first. */
+  /** Photos: stop on every photo to line up the outline (off: the outline from the start is used until a pause). */
   lineUpEach = false;
   private skipping = false;
   private mode_: CaptureMode;
@@ -196,9 +199,11 @@ export class RunController {
       const index = this.src.index ?? 0;
       // A photo of a different shape (portrait vs landscape) needs its own outline.
       const reshaped = Math.abs(this.src.width / this.src.height - shape) > 0.02;
-      if (this.paused || ((this.lineUpEach || reshaped) && index > 0)) {
+      // The outline set at the start is used for every photo, until the user pauses to adjust it.
+      const userPaused = this.paused;
+      if (userPaused || ((this.lineUpEach || reshaped) && index > 0)) {
         this.paused = true;
-        this.on.lineUp?.(index, this.src.count ?? 1, reshaped ? 'shape' : 'each');
+        this.on.lineUp?.(index, this.src.count ?? 1, reshaped ? 'shape' : userPaused && !this.lineUpEach ? 'paused' : 'each');
         await wait();
         if (!this.running) break;
       }

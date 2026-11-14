@@ -353,20 +353,22 @@ try {
   await page.evaluate(() => ((window as any).__seeks = { n: 0, drop: [], deadFrom: Infinity }));
   await page.getByRole('button', { name: /Discard/ }).click();
 
-  // Photos, one per spread, with the outline lined up on each (the default).
+  // Photos (two of each spread): the outline set at the start is used for the whole batch, with no stops,
+  // until Pause & adjust, which stops on one photo; Continue carries on to the end.
   await page.getByRole('button', { name: 'Scan a binder' }).click();
   await page.locator('input[type=text]').fill('Photo Binder');
-  await page.setInputFiles('[data-testid=photo-input]', photoPaths);
-  await page.getByRole('button', { name: 'Read 3 photos' }).waitFor({ timeout: 20000 });
+  await page.setInputFiles('[data-testid=photo-input]', photoPaths.flatMap((p) => [p, p]));
+  await page.getByRole('button', { name: 'Read 6 photos' }).waitFor({ timeout: 20000 });
   await page.screenshot({ path: join(out, '13-photos-lineup.png') });
-  await page.getByRole('button', { name: 'Read 3 photos' }).click();
-  for (let k = 2; k <= 3; k++) {
-    await page.getByRole('heading', { name: `Photo ${k} of 3` }).waitFor({ timeout: 30000 });
-    await page.getByRole('button', { name: 'Use this photo' }).click();
-  }
+  await page.getByRole('button', { name: 'Read 6 photos' }).click();
+  await page.getByRole('button', { name: 'Pause & adjust' }).click();
+  const stoppedAt = page.getByRole('heading', { name: /^Photo [2-6] of 6$/ });
+  await stoppedAt.waitFor({ timeout: 30000 });
+  const stop = await stoppedAt.textContent();
+  await page.getByRole('button', { name: 'Continue' }).click();
   await page.getByText('Review “Photo Binder”').waitFor({ timeout: 120000 });
   const fromPhotos = await reviewed();
-  check(fromPhotos.spreads === 3 && fromPhotos.right >= 52, `photos (lined up on each): ${fromPhotos.spreads} spreads, ${fromPhotos.right}/${fromPhotos.total} pockets right`);
+  check(fromPhotos.spreads === 3 && fromPhotos.right >= 52, `photo batch runs without stopping; Pause & adjust stopped once (${stop}), then ${fromPhotos.spreads} spreads, ${fromPhotos.right}/${fromPhotos.total} pockets right`);
   await page.getByRole('button', { name: /Discard/ }).click();
 
   // Delete a saved binder straight from the home screen's list (the confirm dialog is accepted).
