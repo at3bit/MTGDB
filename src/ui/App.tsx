@@ -3,7 +3,7 @@ import { diagnostics } from '../app/diagnostics.ts';
 import type { CardDB } from '../core/carddb.ts';
 import { loadBaselines, loadCardDB, MissingDataError, Recognizer } from '../app/data.ts';
 import type { Baselines } from '../core/baselines.ts';
-import { addReading, applyOcr, binderEntries, markGhosts, needsOcr, releasePhotos, toPocketView, type LivePrices, type PocketView, type Spread } from '../app/session.ts';
+import { addReading, applyOcr, binderEntries, DEFAULT_SESSION, markGhosts, needsOcr, releasePhotos, toPocketView, type SessionConfig, type LivePrices, type PocketView, type Spread } from '../app/session.ts';
 import { loadCollection, loadHistory, loadLivePrices, recordPrices, saveCollection, saveLivePrices, type Collection, type OwnedCard, type PriceHistory } from '../app/store.ts';
 import { fetchLivePrices } from '../app/prices.ts';
 import type { WirePocket } from '../app/protocol.ts';
@@ -47,6 +47,8 @@ export function App() {
   const [dbStatus, setDbStatus] = useState<{ loading: string | null; error: string | null; missing: boolean }>({ loading: 'Loading card database…', error: null, missing: false });
   const [collection, setCollection] = useState<Collection>({ binders: [] });
   const [englishOnly, setEnglishOnlyState] = useState(readEnglishOnly);
+  /** Review bookkeeping for the current scan (e.g. no see-through cards when empty sleeves hold blanks). */
+  const sessionCfg = useRef<SessionConfig>(DEFAULT_SESSION);
   const [live, setLive] = useState<LivePrices>({});
   const [history, setHistory] = useState<PriceHistory>({});
   const [baselines, setBaselines] = useState<Baselines | null>(null);
@@ -132,7 +134,7 @@ export function App() {
       diagnostics.addReading(r, db);
       const pockets: KeyedPocket[] = r.pockets.map((p) => ({ ...toPocketView(p, db), key: ++pocketKeys }));
       const prev = spreadsRef.current;
-      const next = addReading(prev, { pockets, time: r.time, change: r.change ?? Infinity, manual: !!r.manual }, pps, db);
+      const next = addReading(prev, { pockets, time: r.time, change: r.change ?? Infinity, manual: !!r.manual }, pps, db, sessionCfg.current);
       const repeat = next.length === prev.length && prev.length > 0;
       setRunStats((s) => ({ captures: s.captures + 1, repeats: s.repeats + (repeat ? 1 : 0), reread: s.reread + (r.retried?.length ?? 0) }));
       commitSpreads(next);
@@ -143,7 +145,7 @@ export function App() {
 
   const updatePocket = (spreadId: number, pocket: PocketView) => {
     const next = spreadsRef.current.map((s) => (s.id === spreadId ? { ...s, pockets: s.pockets.map((p) => (p.page === pocket.page && p.slot === pocket.slot ? pocket : p)) } : s));
-    commitSpreads(db ? markGhosts(next, pagesPerSpread, db) : next);
+    commitSpreads(db ? markGhosts(next, pagesPerSpread, db, sessionCfg.current) : next);
   };
 
   const saveBinder = async (binder: string) => {
@@ -213,7 +215,14 @@ export function App() {
             }
           }}
           onBack={() => setScreen({ name: 'home' })}
-          onStart={(binder, source) => {
+          hasCategories={!!db?.hasCategories}
+          onStart={(binder, source, options) => {
+            if (db) {
+              db.setCategories(options.categories);
+              recognizer.current?.updateAllowed();
+            }
+            sessionCfg.current = { ...DEFAULT_SESSION, seeThrough: !options.blankFillers };
+            diagnostics.note('scanOptions', options);
             releasePhotos();
             commitSpreads([]);
             setRunStats({ captures: 0, repeats: 0, reread: 0 });

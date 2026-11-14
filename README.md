@@ -32,7 +32,13 @@ link. Each person's collection is stored only on their own phone.
    When pages are flipped quickly and never settle, the sharpest frame of the
    pause is captured instead, and dropped if it caught the page mid-turn
    (almost nothing matches).
-2. **The outline** (`src/ui/QuadOverlay.tsx`, `src/core/scan.ts`). One outline
+2. **The outline and which way up** (`src/ui/QuadOverlay.tsx`, `src/core/scan.ts`).
+   If a page reads badly, the app also reads it turned 180° (the binder facing
+   the other way) and 90° each way, keeps the turn that identifies clearly more
+   cards, and carries it through the run. On real photos taken with the binder
+   upside down, all 36 pockets were wrong without this; with it, all 23 cards
+   were named right and all 13 blank fillers read as empty.
+   The outline itself: One outline
    with four corners, around the page, or around both pages of an open binder
    with a handle for the gap at the spine. It stays where you put it: each
    capture is read with it as it is. Only a page where some cards don't read is
@@ -54,7 +60,9 @@ link. Each person's collection is stored only on their own phone.
    fingerprint: the whole card's structure, the art box's structure, and the
    colour layout. It's compared against the fingerprints of every paper printing
    on Scryfall (~100k). Several slightly shifted placements are tried, since
-   cards slide around in their pockets. A spread takes about half a second.
+   cards slide around in their pockets, and every placement helps build the
+   shortlist (with only the two likeliest, 3 of 23 cards on real photos were
+   missed although they matched well). A page takes about half a second.
 5. **Name reading** (`src/app/ocr.ts`). Every card's title line is read with
    Tesseract (served by the app itself) and fuzzy-matched to card names, as a
    cross-check: when it agrees with the image match the card is confirmed;
@@ -73,7 +81,9 @@ link. Each person's collection is stored only on their own phone.
    marks the pocket **Which printing?** for you to confirm. Examples are Beta
    vs. Collectors' Edition, or a set card vs. its promo. The chooser shows a
    sharp crop of your card's set symbol next to each printing's, so you can
-   compare them by eye. (Deciding by the symbol automatically was tested and
+   compare them by eye. Different printings of a card are kept as separate
+   entries (they're worth different amounts); two copies of the same printing
+   are one entry. (Deciding by the symbol automatically was tested and
    did no better than the default pick: the symbol is only ~20 px at 4K and
    many look-alikes have identical symbol areas. See `src/core/symbol.ts`.)
 7. **Empty sleeves** (`src/app/session.ts`). An empty sleeve shows whatever
@@ -85,12 +95,24 @@ link. Each person's collection is stored only on their own phone.
    through sleeve". Repeat captures are judged per page, because see-through
    cards can make the right page look unchanged after a turn while the left
    page always changes.
-8. **English only** (default; a checkbox on the scan setup screen). Scryfall
+8. **Before a scan** (setup screen):
+   - **What's in this binder?** White, Blue, Black, Red, Green, Multicolor,
+     Artifact, Land, Colorless (any mix; remembered per binder name). Every
+     printing's colours and type come from Scryfall. The matcher still looks at
+     every card, but one in the binder's colours wins unless another matches
+     clearly better (by more than 6 points), and confidence is judged against
+     other cards of those colours. A card outside them is flagged to check.
+   - **Empty sleeves hold a blank card**: nothing can show through, so the
+     see-through logic below is off. Blank filler cards are recognised either
+     way (a pocket that's mostly flat and bright is empty: blanks measured
+     0.68-0.75 on real photos, real cards at most 0.07, and of 3,400 Scryfall
+     images only Scryfall's own blank substitute cards come near).
+9. **English only** (default; a checkbox on the scan setup screen). Scryfall
    lists ~2,100 non-English printings, and 1,353 of them share their art with
    an English printing, so a photo of an English card could come back as, say,
    the Japanese one. Matching and printing choices skip them unless the box is
    unticked.
-9. **Check, card by card** (`src/ui/CardCheck.tsx`). When a scan finishes, the
+10. **Check, card by card** (`src/ui/CardCheck.tsx`). When a scan finishes, the
    app opens a check of every card before anything is saved: your photo next
    to the proposed match, with name, edition and price side by side ("Scanned
    as" vs. "This option"). Swipe the match (or tap ‹ ›) through the likely
@@ -100,7 +122,7 @@ link. Each person's collection is stored only on their own phone.
    **‹ Back** returns to the previous card. You can stop any time (‹ Pages),
    pick up again with **Check cards**, or tap any card on the pages to check
    just that one. Checked cards are marked ✓.
-10. **Review.** Green pockets were identified. Orange means check it, red means
+11. **Review.** Green pockets were identified. Orange means check it, red means
    not identified (no guess is shown). A name the app isn't sure of is shown
    as a question ("Lightning Bolt?") and isn't saved or counted until you
    check it. Tap any pocket to compare your photo with the match, switch

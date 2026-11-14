@@ -35,6 +35,16 @@ export interface RecognizeConfig {
   matchLowDetail: boolean;
   /** Cut the title-line crop (for reading the name) for every card, not only those the image match didn't settle. */
   nameCropAll?: boolean;
+  /**
+   * How many of the candidate placements build the shortlist against the whole index (the rest only re-rank
+   * it); all of them by default. With only the 2 likeliest, cards sitting a little off in their pocket (or an
+   * outline a little off) were missed although they matched well: on real photos 3 of 23 cards.
+   */
+  coarseWindows?: number;
+  /** A pocket whose card area is at least this flat and bright holds a blank filler card: empty (see blankFraction). */
+  blankFraction: number;
+  /** A card outside the binder's colours beats one in them only if it matches better by more than this. */
+  categoryLeeway: number;
 }
 
 export const DEFAULT_RECOGNIZE: RecognizeConfig = {
@@ -45,6 +55,10 @@ export const DEFAULT_RECOGNIZE: RecognizeConfig = {
   maybeDistance: 58,
   emptyDetail: 150,
   matchLowDetail: true,
+  // Blank filler cards measured 0.68-0.75 on real photos, real cards at most 0.07; of 3,400 Scryfall
+  // images only Scryfall's blank substitute cards (0.40-0.47) come near.
+  blankFraction: 0.45,
+  categoryLeeway: 6,
 };
 
 export type PocketStatus = 'empty' | 'matched' | 'uncertain' | 'unknown';
@@ -74,6 +88,10 @@ export interface PocketResult {
   symbolCrop?: RGBAImage;
   /** Identified although the photo of it is blurry (too little fine detail): worth a re-snap. */
   blurry?: boolean;
+  /** Empty: the sleeve holds a blank filler card. */
+  blank?: boolean;
+  /** Best match is outside the colours/types the binder was said to hold. */
+  offCategory?: boolean;
 }
 
 /** Brightness of the printed border: median of four thin strips just inside the card's edges. */
@@ -99,6 +117,8 @@ export interface MatchIndex {
   back?: Uint32Array;
   /** Only these printings may be returned (1 = allowed); e.g. English only. */
   allowed?: Uint8Array | null;
+  /** Printings in the binder's colours/types (1 = preferred); see CardDB.setCategories. */
+  preferred?: Uint8Array | null;
 }
 
 interface PocketCrop {
@@ -114,6 +134,43 @@ interface PocketCrop {
 
 function grayRect(g: GrayImage, r: Rect, w: number, h: number) {
   return resampleGray(g, r, w, h);
+}
+
+/**
+ * Share of a card window (gray, ~48x67) that is flat and bright: a blank filler card in an empty
+ * sleeve. Real cards have texture almost everywhere (art, text, frame); glare is small and saturated.
+ */
+export function blankFraction(g: GrayImage): number {
+  const { width: w, height: h, data: d } = g;
+  let flat = 0, n = 0;
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      let s = 0, s2 = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const v = d[i + dy * w + dx];
+        s += v;
+        s2 += v * v;
+      }
+      const mean = s / 9;
+      const std = Math.sqrt(Math.max(0, s2 / 9 - mean * mean));
+      if (mean > 150 && mean < 250 && std < 3) flat++;
+      n++;
+    }
+  }
+  return n ? flat / n : 0;
+}
+
+/**
+ * The binder's colours/types first: a card in them wins unless one outside them matches better by more
+ * than `leeway`; then it's `offCategory`. Without a preference the order is unchanged.
+ */
+export function rankByCategory(matches: Match[], preferred: Uint8Array | null | undefined, leeway: number): { matches: Match[]; offCategory: boolean } {
+  if (!preferred || !matches.length) return { matches, offCategory: false };
+  const inCat = matches.filter((m) => preferred[m.card]);
+  const outCat = matches.filter((m) => !preferred[m.card]);
+  if (inCat.length && (!outCat.length || inCat[0].d <= outCat[0].d + leeway)) return { matches: [...inCat, ...outCat], offCategory: false };
+  return { matches, offCategory: true };
 }
 
 /** Card window inside a pocket crop where the card sits if perfectly centred. */
@@ -240,13 +297,18 @@ export function recognizePocket(pc: PocketCrop, idx: MatchIndex, cfg: RecognizeC
   const lowDetail = detail < cfg.emptyDetail;
   const empty = (): PocketResult => ({ page: pc.page, slot: pc.slot, status: 'empty', matches: [], otherNameDistance: Infinity, sharpness: pc.sharpness, glare: pc.glare, thumb: thumbOf(nominal) });
   if (lowDetail && !cfg.matchLowDetail) return empty();
+  // A blank filler card in an empty sleeve (the card behind may show at its edges).
+  if (blankFraction(grayRect(pc.gray, nominal, 48, 67)) >= cfg.blankFraction) return { ...empty(), blank: true };
   const windows = candidateWindows(pc.gray, cfg);
   const fps = windows.map((w) => fingerprint(pc.crop, w, pc.gray));
-  // Stage 1: the two most likely placements against the whole index.
-  const coarse = nearestIn(fps.slice(0, 2), idx, 300);
+  // Stage 1: placements against the whole index, for a shortlist.
+  const coarse = nearestIn(fps.slice(0, cfg.coarseWindows ?? fps.length), idx, 300);
   // Stage 2: all placements against the shortlist; remember which window won.
   const subset = Int32Array.from(coarse.map((m) => m.card));
-  const matches = nearestIn(fps, idx, 40, subset);
+  const pref = idx.preferred;
+  const ranked = rankByCategory(nearestIn(fps, idx, 40, subset), pref, cfg.categoryLeeway);
+  const matches = ranked.matches;
+  const offCategory = ranked.offCategory;
   let bestWindow = nominal;
   let bestK = 0;
   if (matches.length) {
@@ -264,12 +326,16 @@ export function recognizePocket(pc: PocketCrop, idx: MatchIndex, cfg: RecognizeC
       return { page: pc.page, slot: pc.slot, status: 'empty', cardBack: true, matches: [], otherNameDistance: Infinity, sharpness: pc.sharpness, glare: pc.glare, thumb: thumbOf(nominal) };
     }
   }
-  const other = best ? matches.find((m) => idx.nameOf[m.card] !== idx.nameOf[best.card]) : undefined;
+  // How sure: the gap to the next different card (of the binder's colours, when it's one of them).
+  const rivals = pref && best && pref[best.card] ? matches.filter((m) => pref[m.card]) : matches;
+  const other = best ? rivals.find((m) => idx.nameOf[m.card] !== idx.nameOf[best.card]) : undefined;
   const otherD = other ? other.d : best ? best.d + 30 : Infinity;
   if (lowDetail && !(best && best.d <= cfg.acceptDistance && otherD - best.d >= cfg.acceptMargin)) return empty();
   let status: PocketStatus = 'unknown';
   if (best && best.d <= cfg.acceptDistance && otherD - best.d >= cfg.acceptMargin) status = 'matched';
   else if (best && best.d <= cfg.maybeDistance) status = 'uncertain';
+  // Not one of the binder's colours: worth a look (misfiled, or the colours were set wrong).
+  if (offCategory && status === 'matched') status = 'uncertain';
 
   // Crops from the full-resolution frame (sharper than the pocket crop): the title line for OCR, the set symbol for printings.
   const regionOf = (r: readonly [number, number, number, number]): Rect => ({ x: bestWindow.x + bestWindow.w * r[0], y: bestWindow.y + bestWindow.h * r[1], w: bestWindow.w * (r[2] - r[0]), h: bestWindow.h * (r[3] - r[1]) });
@@ -281,6 +347,7 @@ export function recognizePocket(pc: PocketCrop, idx: MatchIndex, cfg: RecognizeC
     slot: pc.slot,
     status,
     blurry: lowDetail || undefined,
+    offCategory: offCategory || undefined,
     matches,
     otherNameDistance: otherD,
     sharpness: pc.sharpness,

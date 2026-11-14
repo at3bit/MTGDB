@@ -9,9 +9,9 @@ export interface WireImage {
 }
 
 export type WorkerRequest =
-  | { type: 'init'; fps: Uint32Array; count: number; nameOf: Int32Array; back?: Uint32Array; allowed?: Uint8Array | null }
-  /** Which printings matching may return (null = all). */
-  | { type: 'allowed'; allowed: Uint8Array | null }
+  | { type: 'init'; fps: Uint32Array; count: number; nameOf: Int32Array; back?: Uint32Array; allowed?: Uint8Array | null; preferred?: Uint8Array | null }
+  /** Which printings matching may return (null = all), and which it prefers (the binder's colours; null = no preference). */
+  | { type: 'allowed'; allowed: Uint8Array | null; preferred: Uint8Array | null }
   /** `runId` groups the spreads of one run so the worker can follow the pages from one spread to the next. */
   /** `tentative`: taken from a pause too short to settle; dropped (`discarded`) if it reads as junk. */
   | { type: 'spread'; job: number; runId: number; frames: WireImage[]; calibration: Calibration; tentative?: boolean };
@@ -34,9 +34,11 @@ export interface WirePocket {
   contrast?: number;
   symbolCrop?: WireImage;
   blurry?: boolean;
+  blank?: boolean;
+  offCategory?: boolean;
 }
 
 export type WorkerResponse =
   | { type: 'ready' }
-  | { type: 'spread'; job: number; pockets: WirePocket[]; ms: number; calibration: Calibration; retried: number[]; discarded?: boolean }
+  | { type: 'spread'; job: number; pockets: WirePocket[]; ms: number; calibration: Calibration; retried: number[]; discarded?: boolean; turns?: number[] }
   | { type: 'error'; job?: number; message: string };

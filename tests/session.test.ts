@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { CardDB, decodeFingerprints, encodeFingerprints, type CardRow, type CardsFile } from '../src/core/carddb.ts';
 import { FP_WORDS } from '../src/core/fingerprint.ts';
-import { addReading, binderEntries, isRepeat, markGhosts, type PocketView, type Spread } from '../src/app/session.ts';
+import { addReading, binderEntries, DEFAULT_SESSION, isRepeat, markGhosts, type PocketView, type Spread } from '../src/app/session.ts';
 import type { PocketStatus } from '../src/core/recognize.ts';
 
 const names = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf', 'Hotel', 'India', 'Juliet', 'Kilo', 'Lima', 'Mike', 'November', 'Oscar', 'Papa', 'Quebec', 'Romeo', 'Sierra', 'Tango', 'Forest'];
@@ -57,11 +57,24 @@ describe('cards seen through empty sleeves', () => {
     expect(m2.pockets[0].ghost).toBe(true);
   });
 
-  it('links two readings of one card that settled on different printings', () => {
+  it('keeps two different printings read confidently as two cards, but links a hazier copy', () => {
     const empty = Array(9).fill(null);
     const s1 = spread(1, empty, [idx('Delta'), ...Array(8).fill(null)]);
     const s2 = spread(2, empty, [DELTA_2, ...Array(8).fill(null)]);
+    expect(markGhosts([s1, s2], 2, db)[0].pockets[9].ghost).toBeFalsy();
+    s1.pockets[9] = { ...s1.pockets[9], matches: [{ card: idx('Delta'), d: 20 }] };
     expect(markGhosts([s1, s2], 2, db)[0].pockets[9].ghost).toBe(true);
+    // Unsure about the printing: probably the same physical card.
+    s1.pockets[9] = { ...s1.pockets[9], matches: [{ card: idx('Delta'), d: 10 }], printingCheck: true };
+    expect(markGhosts([s1, s2], 2, db)[0].pockets[9].ghost).toBe(true);
+  });
+
+  it('never links anything when empty sleeves hold blank cards', () => {
+    const empty = Array(9).fill(null);
+    const s1 = spread(1, empty, [idx('Delta'), ...Array(8).fill(null)]);
+    const s2 = spread(2, empty, [idx('Delta'), ...Array(8).fill(null)]);
+    expect(markGhosts([s1, s2], 2, db)[0].pockets[9].ghost).toBe(true);
+    expect(markGhosts([s1, s2], 2, db, { ...DEFAULT_SESSION, seeThrough: false })[0].pockets[9].ghost).toBeFalsy();
   });
 
   it('does not link different printings of a basic land unless the earlier one looks hazier', () => {

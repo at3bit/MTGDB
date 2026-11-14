@@ -40,6 +40,13 @@ export interface TrackedSpread {
   calibration: Calibration;
   /** Pages that read badly and were re-read from a different placement. */
   retried: number[];
+  /** Quarter turns of each page relative to the outline (2 = the cards are upside down); pass on as TrackOptions.turns. */
+  turns: number[];
+}
+
+/** A page quad turned by `k` quarter turns: its corners start `k` places later, so the cards are read that much turned. */
+export function turnQuad(q: Quad, k: number): Quad {
+  return [0, 1, 2, 3].map((i) => q[(i + k) % 4]) as Quad;
 }
 
 /**
@@ -61,9 +68,12 @@ export interface TrackOptions {
   minGain: number;
   /** The old behaviour, for comparison: re-find the pages on every spread and follow them. */
   follow?: boolean;
+  /** Quarter turns per page found on the previous spread (see TrackedSpread.turns). */
+  turns?: number[];
 }
 
-export const DEFAULT_TRACK: TrackOptions = { retryBelow: 1, minGain: 2 };
+// Retrying placements only when 2+ cards of a page are unidentified read the same as on any miss (simulated drifting binders) and costs less.
+export const DEFAULT_TRACK: TrackOptions = { retryBelow: 0.85, minGain: 2 };
 
 export function recognizeTrackedSpread(
   frames: RGBAImage[],
@@ -75,10 +85,35 @@ export function recognizeTrackedSpread(
 ): TrackedSpread {
   const ref = frames[0];
   const usable = prev && prev.pages.length === base.pages.length ? prev : undefined;
+  // The outline in card order: turned as the cards were found on the previous spread.
+  const turns = base.pages.map((_, p) => opts.turns?.[p] ?? 0);
+  const outline = base;
+  base = { ...outline, pages: outline.pages.map((q, p) => turnQuad(q, turns[p])) };
   const start = opts.follow ? (usable ? alignCalibration(ref, usable, NARROW_ALIGN).calibration : alignCalibration(ref, base, DEFAULT_ALIGN).calibration) : base;
   let pockets = recognizeSpread(frames, start, idx, cfg);
   const pages: Quad[] = [...start.pages];
   const retried: number[] = [];
+  // A page that reads badly may be the wrong way round: the cards upside down (the binder facing the other
+  // way) or sideways relative to the outline. Read upside down, every card on a real page came back wrong.
+  for (let p = 0; p < pages.length; p++) {
+    const mine = pockets.filter((x) => x.page === p);
+    const q = quality(mine);
+    if (q.nonEmpty < 3 || q.matched >= q.nonEmpty * 0.6) continue;
+    let best = { pockets: mine, q, turn: turns[p] };
+    for (const k of [2, 1, 3]) {
+      const turn = (turns[p] + k) % 4;
+      const quad = turnQuad(outline.pages[p], turn);
+      const res = recognizeSpread(frames, { ...base, pages: [quad] }, idx, cfg).map((r) => ({ ...r, page: p }));
+      const rq = quality(res);
+      if (rq.matched >= best.q.matched + opts.minGain) best = { pockets: res, q: rq, turn };
+    }
+    if (best.turn !== turns[p]) {
+      turns[p] = best.turn;
+      pages[p] = turnQuad(outline.pages[p], best.turn);
+      base = { ...base, pages: base.pages.map((b, i) => (i === p ? pages[p] : b)) };
+      pockets = [...pockets.filter((x) => x.page !== p), ...best.pockets].sort((a, b) => a.page - b.page || a.slot - b.slot);
+    }
+  }
   let narrowFromBase: Calibration | undefined;
   let wideFromBase: Calibration | undefined;
   let narrowFromPrev: Calibration | undefined;
@@ -107,5 +142,5 @@ export function recognizeTrackedSpread(
       retried.push(p);
     }
   }
-  return { pockets, calibration: { ...base, pages }, retried };
+  return { pockets, calibration: { rows: outline.rows, cols: outline.cols, pages }, retried, turns };
 }

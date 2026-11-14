@@ -13,7 +13,26 @@
 //   Entry i belongs to cards[i].
 import { FP_WORDS } from './fingerprint.ts';
 
-export type CardRow = [string, string, string, string, string, number, number | null, number | null, number | null, string?, number?];
+export type CardRow = [string, string, string, string, string, number, number | null, number | null, number | null, string?, number?, number?];
+
+/**
+ * What a binder is sorted by: a printing's colour (one colour, or multicolour) and type, as bits
+ * (cards.json row field 11). A black artifact creature is both B and artifact; a land is just land.
+ */
+export const CATEGORY = { W: 1, U: 2, B: 4, R: 8, G: 16, multicolor: 32, colorless: 64, artifact: 128, land: 256 } as const;
+export type Category = keyof typeof CATEGORY;
+
+/** Category bits from Scryfall's colours and front-face type line. */
+export function categoryBits(colors: string[], typeLine: string): number {
+  let b = 0;
+  const land = /\bLand\b/.test(typeLine);
+  if (colors.length === 1) b |= CATEGORY[colors[0] as 'W' | 'U' | 'B' | 'R' | 'G'] ?? 0;
+  else if (colors.length > 1) b |= CATEGORY.multicolor;
+  else if (!land) b |= CATEGORY.colorless;
+  if (/\bArtifact\b/.test(typeLine)) b |= CATEGORY.artifact;
+  if (land) b |= CATEGORY.land;
+  return b;
+}
 
 export type BorderColor = 'black' | 'white' | 'borderless' | 'silver' | 'gold' | 'yellow' | 'unknown';
 const BORDERS: Record<string, BorderColor> = { b: 'black', w: 'white', x: 'borderless', s: 'silver', g: 'gold', y: 'yellow' };
@@ -110,6 +129,8 @@ export class CardDB {
   readonly foreign: Uint8Array;
   /** Printings the matcher may return (null = all). See setEnglishOnly. */
   allowed: Uint8Array | null = null;
+  /** Printings in the categories the binder holds (null = no preference). See setCategories. */
+  preferred: Uint8Array | null = null;
   private readonly gramIndex = new Map<string, number[]>();
 
   constructor(file: CardsFile, fps: { count: number; data: Uint32Array }) {
@@ -208,6 +229,29 @@ export class CardDB {
     }
     this.allowed = new Uint8Array(this.count);
     for (let i = 0; i < this.count; i++) this.allowed[i] = this.foreign[i] ? 0 : 1;
+  }
+
+  /** Whether the card data knows colours and types (older data doesn't). */
+  get hasCategories(): boolean {
+    return this.file.cards.some((r) => r[11] !== undefined);
+  }
+
+  /** Category bits of a printing (0 if unknown). */
+  categoryOf(i: number): number {
+    return this.file.cards[i][11] ?? 0;
+  }
+
+  /**
+   * Prefer printings in these categories (a mask of CATEGORY bits; 0 = no preference). The matcher still
+   * looks at every card, but one in the binder's colours wins unless another clearly matches better.
+   */
+  setCategories(mask: number) {
+    if (!mask || !this.hasCategories) {
+      this.preferred = null;
+      return;
+    }
+    this.preferred = new Uint8Array(this.count);
+    for (let i = 0; i < this.count; i++) this.preferred[i] = this.categoryOf(i) & mask ? 1 : 0;
   }
 
   /** Printings of a name that matching may use (all of them if none is allowed, e.g. a card only printed in Japanese). */

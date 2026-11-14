@@ -110,9 +110,11 @@ export function CardCheck({ db, live, pocket, location, position, onSave, onBack
     ? 'Seen through an empty sleeve: it’s recorded on the page where it really is. Save it here only if it really is in this sleeve.'
     : pocket.nameCheck === 'differs' && pocket.readName !== undefined
       ? `The picture looks like ${current?.name ?? 'another card'}, but the name on the card reads as ${db.names[pocket.readName]}. Swipe or search for the right one.`
-      : unsure
-        ? 'The app isn’t sure of this card. It isn’t saved until you check it.'
-        : pocket.status === 'unknown'
+      : pocket.offCategory && unsure
+        ? 'This card isn’t one of the colours you said this binder holds. Check it’s right (or that it’s in the wrong binder).'
+        : unsure
+          ? 'The app isn’t sure of this card. It isn’t saved until you check it.'
+          : pocket.status === 'unknown'
           ? 'Not identified. Swipe through the closest matches or search for the name.'
           : pocket.printingCheck
             ? 'Several printings look alike but are priced differently: compare the set symbol and border, and swipe to the right one.'

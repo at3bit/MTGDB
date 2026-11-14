@@ -111,6 +111,8 @@ export function ScanScreen({ binder, source, recognizer, spreadsSoFar, onSpread,
   const [lineUp, setLineUp] = useState<{ index: number; count: number; reason: 'each' | 'shape' } | null>(null);
   /** Captures where a page didn't read well with the outline and was found elsewhere. */
   const [shifted, setShifted] = useState(0);
+  /** The cards turned out to be upside down (2) or sideways (1, 3) relative to the outline. */
+  const [turned, setTurned] = useState(0);
   /** Timed shots: seconds to the next shot (null = not counting), and when the last one was taken. */
   const [countdown, setCountdown] = useState<number | null>(null);
   const [shotAt, setShotAt] = useState(0);
@@ -253,6 +255,8 @@ export function ScanScreen({ binder, source, recognizer, spreadsSoFar, onSpread,
           onSpread(r, pagesPerSpread);
           // The outline stays where the user put it; if a page had to be found elsewhere, say so.
           if (r.retried.length) setShifted((n) => n + 1);
+          const t = r.turns?.find((x) => x !== 0);
+          if (t !== undefined) setTurned(t);
         },
         lineUp: (index, count, reason) => {
           setLineUp({ index, count, reason });
@@ -419,6 +423,12 @@ export function ScanScreen({ binder, source, recognizer, spreadsSoFar, onSpread,
 
       {phase === 'running' && (
         <div className="stack">
+          {turned !== 0 && (
+            <div className="notice small" style={{ margin: 0 }}>
+              The cards are {turned === 2 ? 'upside down' : 'sideways'} compared with the outline, so the app is reading them turned
+              round. Next time, tap Rotate on the outline screen until the white edge is along the top of the cards.
+            </div>
+          )}
           {shifted > 0 && (
             <div className="notice small" style={{ margin: 0 }}>
               On {shifted} capture{shifted === 1 ? '' : 's'} a page didn’t line up with the outline. If the cards aren’t inside the grid, tap Pause &amp; adjust.

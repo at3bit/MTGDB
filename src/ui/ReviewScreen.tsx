@@ -30,6 +30,7 @@ interface Props {
 /** What a pocket tile says when it isn't showing a card name. */
 function pocketLabel(p: PocketView): string {
   if (p.cardBack) return 'Card back';
+  if (p.blank) return 'Blank';
   if (p.status === 'empty') return 'Empty';
   if (p.status === 'unknown') return 'Not identified';
   return 'Check';

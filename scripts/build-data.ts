@@ -18,7 +18,7 @@ import { createGunzip } from 'node:zlib';
 import sharp from 'sharp';
 import { streamArray } from './stream-json.ts';
 import { fingerprint, FP_WORDS } from '../src/core/fingerprint.ts';
-import { decodeFingerprints, encodeFingerprints, type CardRow, type CardsFile } from '../src/core/carddb.ts';
+import { categoryBits, decodeFingerprints, encodeFingerprints, type CardRow, type CardsFile } from '../src/core/carddb.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = join(root, 'public', 'data');
@@ -57,7 +57,9 @@ interface ScryCard {
   set_type: string;
   promo: boolean;
   image_uris?: { small: string };
-  card_faces?: { name: string; image_uris?: { small: string } }[];
+  card_faces?: { name: string; image_uris?: { small: string }; colors?: string[]; type_line?: string }[];
+  colors?: string[];
+  type_line?: string;
   prices: { usd: string | null; usd_foil: string | null; usd_etched: string | null };
 }
 
@@ -119,7 +121,9 @@ async function main() {
     const img = smallImage(c);
     if (!img) continue;
     const fin = (c.finishes.includes('nonfoil') ? 1 : 0) | (c.finishes.includes('foil') ? 2 : 0) | (c.finishes.includes('etched') ? 4 : 0);
-    rows.push([c.id, c.name, c.set, c.collector_number, c.rarity, fin, price(c.prices.usd), price(c.prices.usd_foil), price(c.prices.usd_etched), BORDER_CODE[c.border_color] ?? '', printingPriority(c)]);
+    const front = c.card_faces?.[0];
+    const cats = categoryBits(c.colors ?? front?.colors ?? [], front?.type_line ?? c.type_line ?? '');
+    rows.push([c.id, c.name, c.set, c.collector_number, c.rarity, fin, price(c.prices.usd), price(c.prices.usd_foil), price(c.prices.usd_etched), BORDER_CODE[c.border_color] ?? '', printingPriority(c), cats]);
     images.push(img);
     langs.push(c.lang);
     sets[c.set] = c.set_name;

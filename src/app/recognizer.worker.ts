@@ -1,14 +1,14 @@
 /// <reference lib="webworker" />
 // Runs recognition off the UI thread so the camera preview stays smooth.
 import { DEFAULT_RECOGNIZE, type MatchIndex } from '../core/recognize.ts';
-import { isJunkReading, recognizeTrackedSpread } from '../core/scan.ts';
+import { DEFAULT_TRACK, isJunkReading, recognizeTrackedSpread } from '../core/scan.ts';
 import type { Calibration } from '../core/geometry.ts';
 import type { RGBAImage } from '../core/image.ts';
 import type { WorkerRequest, WorkerResponse, WirePocket } from './protocol.ts';
 
 let index: MatchIndex | null = null;
 /** Where the pages were on the last spread of the current run. */
-let tracking: { runId: number; calibration: Calibration } | null = null;
+let tracking: { runId: number; calibration: Calibration; turns: number[] } | null = null;
 
 const post = (msg: WorkerResponse, transfer: Transferable[] = []) => (self as DedicatedWorkerGlobalScope).postMessage(msg, transfer);
 
@@ -39,27 +39,31 @@ async function handle(ev: MessageEvent<WorkerRequest>) {
   const msg = ev.data;
   try {
     if (msg.type === 'init') {
-      index = { fps: msg.fps, count: msg.count, nameOf: msg.nameOf, back: msg.back, allowed: msg.allowed ?? null };
+      index = { fps: msg.fps, count: msg.count, nameOf: msg.nameOf, back: msg.back, allowed: msg.allowed ?? null, preferred: msg.preferred ?? null };
       post({ type: 'ready' });
       return;
     }
     if (msg.type === 'allowed') {
-      if (index) index.allowed = msg.allowed;
+      if (index) {
+        index.allowed = msg.allowed;
+        index.preferred = msg.preferred;
+      }
       return;
     }
     if (msg.type === 'spread') {
       if (!index) throw new Error('recognizer not initialised');
       const t0 = performance.now();
       const frames: RGBAImage[] = msg.frames.map((f) => ({ width: f.width, height: f.height, data: new Uint8ClampedArray(f.buffer) }));
-      const prev = tracking?.runId === msg.runId ? tracking.calibration : undefined;
+      const same = tracking?.runId === msg.runId ? tracking : null;
+      const prev = same?.calibration;
       // Every card's title line comes back, so its name can be read as a cross-check of the image match.
-      const tracked = recognizeTrackedSpread(frames, msg.calibration, prev, index, { ...DEFAULT_RECOGNIZE, nameCropAll: true });
+      const tracked = recognizeTrackedSpread(frames, msg.calibration, prev, index, { ...DEFAULT_RECOGNIZE, nameCropAll: true }, { ...DEFAULT_TRACK, turns: same?.turns });
       if (msg.tentative && isJunkReading(tracked.pockets)) {
         // Caught the page mid-turn: keep tracking from the last good spread.
         post({ type: 'spread', job: msg.job, pockets: [], ms: performance.now() - t0, calibration: tracked.calibration, retried: [], discarded: true });
         return;
       }
-      tracking = { runId: msg.runId, calibration: tracked.calibration };
+      tracking = { runId: msg.runId, calibration: tracked.calibration, turns: tracked.turns };
       const results = tracked.pockets;
       const thumbs = await Promise.all(results.map((r) => jpeg(r.thumb)));
       const transfer: Transferable[] = [];
@@ -83,11 +87,13 @@ async function handle(ev: MessageEvent<WorkerRequest>) {
           borderLuma: r.borderLuma,
           cardBack: r.cardBack,
           blurry: r.blurry,
+          blank: r.blank,
+          offCategory: r.offCategory,
           contrast: r.contrast,
           symbolCrop: r.symbolCrop ? { width: r.symbolCrop.width, height: r.symbolCrop.height, buffer: r.symbolCrop.data.buffer as ArrayBuffer } : undefined,
         };
       });
-      post({ type: 'spread', job: msg.job, pockets, ms: performance.now() - t0, calibration: tracked.calibration, retried: tracked.retried }, transfer);
+      post({ type: 'spread', job: msg.job, pockets, ms: performance.now() - t0, calibration: tracked.calibration, retried: tracked.retried, turns: tracked.turns }, transfer);
     }
   } catch (e) {
     post({ type: 'error', job: 'job' in msg ? msg.job : undefined, message: (e as Error).message });

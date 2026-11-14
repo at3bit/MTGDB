@@ -37,6 +37,10 @@ export interface PocketView {
   cardBack?: boolean;
   /** Identified from a blurry photo (too little fine detail): worth re-scanning that page. */
   blurry?: boolean;
+  /** Empty: the sleeve holds a blank filler card. */
+  blank?: boolean;
+  /** The best match isn't one of the colours/types the binder was said to hold. */
+  offCategory?: boolean;
   /**
    * The card's printed name, read with OCR, against the image match: 'agrees' confirms it, 'differs' means
    * the name clearly reads as another card (readName) so the pocket is flagged, 'unread' means no clean read.
@@ -99,6 +103,8 @@ export function toPocketView(p: WirePocket, db: CardDB): PocketView {
       borderLuma: p.borderLuma,
       cardBack: p.cardBack,
       blurry: p.blurry,
+      blank: p.blank,
+      offCategory: p.offCategory,
       sharpness: p.sharpness,
       contrast: p.contrast,
       symbolUrl: p.symbolCrop ? imageToDataURL(p.symbolCrop, 0.9) : undefined,
@@ -138,9 +144,11 @@ export interface SessionConfig {
   /** A card this much softer AND flatter than its page's typical card is probably behind an empty sleeve. */
   seeThroughSharpness: number;
   seeThroughContrast: number;
+  /** Look for cards seen through empty sleeves at all (off when empty sleeves hold blank filler cards). */
+  seeThrough: boolean;
 }
 
-export const DEFAULT_SESSION: SessionConfig = { turnChange: 0.35, pageAgreement: 0.5, ghostReach: 3, seeThroughSharpness: 0.45, seeThroughContrast: 0.85 };
+export const DEFAULT_SESSION: SessionConfig = { turnChange: 0.35, pageAgreement: 0.5, ghostReach: 3, seeThroughSharpness: 0.45, seeThroughContrast: 0.85, seeThrough: true };
 
 /** Pockets the user should look at: unsure readings, look-alike printings, and suspected see-through cards. */
 export function needsCheck(p: PocketView): boolean {
@@ -205,8 +213,14 @@ export function markGhosts(spreads: Spread[], pagesPerSpread: number, db: CardDB
     // readings often settle on different printings). Basic lands are the exception: whole pages of them are
     // common, so there it takes the same printing or a clearly hazier copy.
     if (ng === nr) {
+      // A see-through copy is behind extra plastic: it matches clearly worse than the real one.
+      const hazier = dist(ghost) >= dist(real) + 3;
+      // Two different printings, each read confidently and neither hazier: two real cards (a binder can hold
+      // several printings of a card, and they're worth different amounts).
+      const sure = (p: PocketView) => p.status === 'matched' && !p.printingCheck;
+      if (ghost.chosen !== real.chosen && sure(ghost) && sure(real) && !hazier) return null;
       if (!BASIC_LAND.test(db.names[ng])) return 'same';
-      return ghost.chosen === real.chosen || dist(ghost) >= dist(real) + 3 ? 'same' : null;
+      return ghost.chosen === real.chosen || hazier ? 'same' : null;
     }
     // One of the two readings is unsure and has the other as a close runner-up. (Two confident, different
     // readings are two different cards.)
@@ -215,6 +229,7 @@ export function markGhosts(spreads: Spread[], pagesPerSpread: number, db: CardDB
     return null;
   };
   const out: Spread[] = spreads.map((s) => ({ ...s, pockets: s.pockets.map((p) => ({ ...p, ghost: false, seeThrough: false })) }));
+  if (!cfg.seeThrough) return keepUnchanged(spreads, out);
   const find = (s: Spread | undefined, page: number, slot: number) => s?.pockets.find((p) => p.page === page && p.slot === slot);
   out.forEach((s, i) => {
     for (const p of s.pockets) {
@@ -246,7 +261,11 @@ export function markGhosts(spreads: Spread[], pagesPerSpread: number, db: CardDB
       p.seeThrough = p.sharpness! < cfg.seeThroughSharpness * mSharp && p.contrast! < cfg.seeThroughContrast * mContrast;
     }
   }
-  // Keep the original objects where nothing changed (cheaper re-renders).
+  return keepUnchanged(spreads, out);
+}
+
+/** The original spreads where nothing changed (cheaper re-renders). */
+function keepUnchanged(spreads: Spread[], out: Spread[]): Spread[] {
   return out.map((s, i) => {
     const orig = spreads[i];
     const same = s.pockets.every((p, k) => {

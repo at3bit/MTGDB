@@ -125,3 +125,56 @@ describe('finishes', () => {
     expect(binderEntries(spreads, 1, fdb)[0].finish).toBe('foil');
   });
 });
+
+describe('binder colours and types', () => {
+  it('reads a printing\'s category from its colours and type line', async () => {
+    const { categoryBits, CATEGORY } = await import('../src/core/carddb.ts');
+    expect(categoryBits(['B'], 'Creature — Zombie')).toBe(CATEGORY.B);
+    expect(categoryBits(['B', 'R'], 'Instant')).toBe(CATEGORY.multicolor);
+    expect(categoryBits([], 'Artifact Creature — Golem')).toBe(CATEGORY.colorless | CATEGORY.artifact);
+    expect(categoryBits(['B'], 'Artifact — Equipment')).toBe(CATEGORY.B | CATEGORY.artifact);
+    expect(categoryBits([], 'Basic Land — Swamp')).toBe(CATEGORY.land);
+  });
+  it('prefers a card in the binder\'s colours unless another matches clearly better', async () => {
+    const { rankByCategory } = await import('../src/core/recognize.ts');
+    const preferred = Uint8Array.from([0, 1, 0]); // card 1 is black, the others aren't
+    const close = [{ card: 0, d: 20 }, { card: 1, d: 24 }, { card: 2, d: 40 }];
+    expect(rankByCategory(close, preferred, 6)).toEqual({ matches: [{ card: 1, d: 24 }, { card: 0, d: 20 }, { card: 2, d: 40 }], offCategory: false });
+    const far = [{ card: 0, d: 12 }, { card: 1, d: 30 }];
+    expect(rankByCategory(far, preferred, 6)).toEqual({ matches: far, offCategory: true });
+    expect(rankByCategory(far, null, 6)).toEqual({ matches: far, offCategory: false });
+  });
+});
+
+describe('blank filler cards and turned pages', () => {
+  it('a flat white card is blank; a printed card is not', async () => {
+    const { blankFraction } = await import('../src/core/recognize.ts');
+    const { createGray } = await import('../src/core/image.ts');
+    const white = createGray(48, 67);
+    white.data.fill(225);
+    const printed = createGray(48, 67);
+    const r = rng(2);
+    printed.data.forEach((_, i) => (printed.data[i] = 60 + r() * 150));
+    expect(blankFraction(white)).toBeGreaterThan(0.9);
+    expect(blankFraction(printed)).toBeLessThan(0.05);
+  });
+  it('finds cards that are upside down compared with the outline, and keeps reading them that way', async () => {
+    const { turnQuad } = await import('../src/core/scan.ts');
+    const n = 60;
+    const cards = Array.from({ length: n }, (_, i) => makeCard(700 + i));
+    const f = new Uint32Array(n * FP_WORDS);
+    cards.forEach((c, i) => f.set(fingerprint(toReferenceSize(c)), i * FP_WORDS));
+    const idx: MatchIndex = { fps: f, count: n, nameOf: Int32Array.from({ length: n }, (_, i) => i) };
+    const ids = Array.from({ length: 18 }, (_, i) => (i * 7) % n);
+    const scene = renderSpread(ids.map((i) => cards[i]), { width: 1920, height: 1080, seed: 3, noise: 2, blur: true });
+    // The outline drawn the wrong way round (as if the binder faced the other way).
+    const wrong = { ...scene.calibration, pages: scene.calibration.pages.map((q) => turnQuad(q, 2)) };
+    const first = recognizeTrackedSpread([scene.frame], wrong, undefined, idx);
+    expect(first.turns).toEqual([2, 2]);
+    const right = first.pockets.filter((p) => p.status === 'matched' && p.matches[0].card === ids[p.page * 9 + p.slot]).length;
+    expect(right).toBeGreaterThanOrEqual(16);
+    // The next spread starts the right way round.
+    const next = recognizeTrackedSpread([scene.frame], wrong, first.calibration, idx, undefined, { retryBelow: 1, minGain: 2, turns: first.turns });
+    expect(next.turns).toEqual([2, 2]);
+  });
+});

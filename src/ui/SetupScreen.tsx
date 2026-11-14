@@ -1,20 +1,70 @@
 import { useRef, useState } from 'react';
+import { CATEGORY, type Category } from '../core/carddb.ts';
 import type { Collection } from '../app/store.ts';
 import type { ScanSource } from './ScanScreen.tsx';
+
+/** Choices made before a scan. */
+export interface ScanOptions {
+  /** CATEGORY bits of what the binder holds (0 = anything). */
+  categories: number;
+  /** Empty sleeves hold a blank card, so nothing can be seen through them. */
+  blankFillers: boolean;
+}
+
+const CHIPS: { cat: Category; label: string }[] = [
+  { cat: 'W', label: 'White' },
+  { cat: 'U', label: 'Blue' },
+  { cat: 'B', label: 'Black' },
+  { cat: 'R', label: 'Red' },
+  { cat: 'G', label: 'Green' },
+  { cat: 'multicolor', label: 'Multicolor' },
+  { cat: 'artifact', label: 'Artifact' },
+  { cat: 'land', label: 'Land' },
+  { cat: 'colorless', label: 'Colorless' },
+];
+
+const CATS_KEY = 'mtgdb-binder-categories';
+const FILLERS_KEY = 'mtgdb-blank-fillers';
+const readJSON = <T,>(k: string, d: T): T => {
+  try {
+    return (JSON.parse(localStorage.getItem(k) ?? 'null') as T) ?? d;
+  } catch {
+    return d;
+  }
+};
+const writeJSON = (k: string, v: unknown) => {
+  try {
+    localStorage.setItem(k, JSON.stringify(v));
+  } catch {
+    /* private mode */
+  }
+};
 
 interface Props {
   collection: Collection;
   englishOnly: boolean;
   onEnglishOnly: (on: boolean) => void;
-  onStart: (binder: string, source: ScanSource) => void;
+  onStart: (binder: string, source: ScanSource, options: ScanOptions) => void;
+  /** Whether the card data knows colours and types. */
+  hasCategories: boolean;
   onBack: () => void;
 }
 
-export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, onBack }: Props) {
+export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, onBack, hasCategories }: Props) {
   const [name, setName] = useState(collection.binders[0]?.name ?? 'Binder 1');
   const fileInput = useRef<HTMLInputElement>(null);
   const photoInput = useRef<HTMLInputElement>(null);
   const exists = collection.binders.some((b) => b.name === name.trim());
+  // What each binder holds is remembered by its name ("Black binder" stays Black).
+  const [byBinder, setByBinder] = useState<Record<string, number>>(() => readJSON(CATS_KEY, {}));
+  const categories = byBinder[name.trim()] ?? 0;
+  const setCategories = (mask: number) => {
+    const next = { ...byBinder, [name.trim()]: mask };
+    setByBinder(next);
+    writeJSON(CATS_KEY, next);
+  };
+  const [blankFillers, setBlankFillers] = useState(() => readJSON(FILLERS_KEY, false));
+  const start = (source: ScanSource) => onStart(name.trim(), source, { categories, blankFillers });
 
   return (
     <div>
@@ -33,6 +83,30 @@ export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, o
           </datalist>
         </label>
         {exists && <div className="muted small">Saving will replace the cards stored for “{name.trim()}”.</div>}
+        {hasCategories && (
+          <div>
+            <div className="small" style={{ marginBottom: 6 }}>
+              What’s in this binder? <span className="muted">(the app looks at these cards first)</span>
+            </div>
+            <div className="chips" role="group" aria-label="Binder colours and types">
+              <button className={`chip ${categories === 0 ? 'on' : ''}`} onClick={() => setCategories(0)}>Anything</button>
+              {CHIPS.map(({ cat, label }) => (
+                <button
+                  key={cat}
+                  className={`chip ${categories & CATEGORY[cat] ? 'on' : ''}`}
+                  aria-pressed={!!(categories & CATEGORY[cat])}
+                  onClick={() => setCategories(categories ^ CATEGORY[cat])}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <label className="row small" style={{ gap: 8 }}>
+          <input type="checkbox" checked={blankFillers} onChange={(e) => { setBlankFillers(e.target.checked); writeJSON(FILLERS_KEY, e.target.checked); }} />
+          <span>Empty sleeves hold a blank card <span className="muted">(nothing shows through them, so the app doesn’t look for see-through cards)</span></span>
+        </label>
         <label className="row small" style={{ gap: 8 }}>
           <input type="checkbox" checked={englishOnly} onChange={(e) => onEnglishOnly(e.target.checked)} />
           <span>My cards are in English <span className="muted">(ignore foreign-language printings, which often share art with English ones)</span></span>
@@ -43,7 +117,7 @@ export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, o
         <p className="muted small" style={{ margin: '-4px 0 0' }}>
           Most accurate: take a photo of each page (or open binder) with the Camera app, then pick them all here, in page order.
         </p>
-        <button className="btn block" disabled={!name.trim()} onClick={() => onStart(name.trim(), 'camera')}>
+        <button className="btn block" disabled={!name.trim()} onClick={() => start('camera')}>
           Use live camera
         </button>
         <button className="btn block" disabled={!name.trim()} onClick={() => fileInput.current?.click()}>
@@ -59,7 +133,7 @@ export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, o
           onChange={(e) => {
             const files = [...(e.target.files ?? [])];
             e.target.value = '';
-            if (files.length) onStart(name.trim(), files);
+            if (files.length) start(files);
           }}
         />
         <input
@@ -70,7 +144,7 @@ export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, o
           data-testid="video-input"
           onChange={(e) => {
             const f = e.target.files?.[0];
-            if (f) onStart(name.trim(), f);
+            if (f) start(f);
           }}
         />
       </div>

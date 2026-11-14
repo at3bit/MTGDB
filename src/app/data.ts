@@ -122,6 +122,8 @@ export interface SpreadReading {
   retried: number[];
   /** A tentative capture that read as junk (caught mid-turn); ignore it. */
   discarded?: boolean;
+  /** Quarter turns of each page relative to the outline (2: the cards are upside down). */
+  turns?: number[];
 }
 
 type Pending = { resolve: (p: SpreadReading) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> };
@@ -154,13 +156,13 @@ export class Recognizer {
     this.ready.catch(() => {});
     worker.addEventListener('message', (ev: MessageEvent<WorkerResponse>) => {
       const m = ev.data;
-      if (m.type === 'spread') this.settle(m.job, (p) => p.resolve({ pockets: m.pockets, ms: m.ms, calibration: m.calibration, retried: m.retried, discarded: m.discarded }));
+      if (m.type === 'spread') this.settle(m.job, (p) => p.resolve({ pockets: m.pockets, ms: m.ms, calibration: m.calibration, retried: m.retried, discarded: m.discarded, turns: m.turns }));
       else if (m.type === 'error' && m.job !== undefined) this.settle(m.job, (p) => p.reject(new Error(m.message)));
     });
     // The worker died (out of memory, or a crash): fail what it held and start a new one.
     worker.addEventListener('error', (e) => this.restart(`the card reader crashed${e.message ? ` (${e.message})` : ''}`));
     const db = this.db;
-    const msg: WorkerRequest = { type: 'init', fps: db.fps.slice(), count: db.count, nameOf: db.nameOf.slice(), back: db.back?.slice(), allowed: db.allowed?.slice() ?? null };
+    const msg: WorkerRequest = { type: 'init', fps: db.fps.slice(), count: db.count, nameOf: db.nameOf.slice(), back: db.back?.slice(), allowed: db.allowed?.slice() ?? null, preferred: db.preferred?.slice() ?? null };
     worker.postMessage(msg);
   }
 
@@ -202,9 +204,9 @@ export class Recognizer {
     });
   }
 
-  /** Follow the card database's allowed printings (after CardDB.setEnglishOnly). */
+  /** Follow the card database's allowed and preferred printings (after CardDB.setEnglishOnly / setCategories). */
   updateAllowed() {
-    const msg: WorkerRequest = { type: 'allowed', allowed: this.db.allowed?.slice() ?? null };
+    const msg: WorkerRequest = { type: 'allowed', allowed: this.db.allowed?.slice() ?? null, preferred: this.db.preferred?.slice() ?? null };
     this.worker.postMessage(msg);
   }
 
