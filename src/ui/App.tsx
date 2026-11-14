@@ -148,6 +148,13 @@ export function App() {
     commitSpreads(db ? markGhosts(next, pagesPerSpread, db, sessionCfg.current) : next);
   };
 
+  /** Removes a binder and its cards from the collection on this phone. */
+  const deleteBinder = async (binder: string) => {
+    const next: Collection = { binders: collection.binders.filter((b) => b.name !== binder) };
+    await saveCollection(next);
+    setCollection(next);
+  };
+
   const saveBinder = async (binder: string) => {
     if (!db) return;
     // One entry per printing (quantities aren't tracked); see-through cards and card backs are left out.
@@ -198,6 +205,7 @@ export function App() {
           refreshing={refreshing}
           onScan={() => setScreen({ name: 'setup' })}
           onOpenBinder={(b) => setScreen({ name: 'binder', binder: b })}
+          onDeleteBinder={deleteBinder}
           onBrowse={(query) => setScreen({ name: 'all', query })}
           onRefresh={refresh}
         />
@@ -278,9 +286,7 @@ export function App() {
           baselines={baselines}
           onBack={() => setScreen({ name: 'home' })}
           onDelete={async () => {
-            const next = { binders: collection.binders.filter((b) => b.name !== screen.binder) };
-            await saveCollection(next);
-            setCollection(next);
+            await deleteBinder(screen.binder);
             setScreen({ name: 'home' });
           }}
         />

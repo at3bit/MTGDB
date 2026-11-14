@@ -15,6 +15,7 @@ interface Props {
   refreshing: string | null;
   onScan: () => void;
   onOpenBinder: (name: string) => void;
+  onDeleteBinder: (name: string) => void;
   /** Open the all-cards view, optionally searching for a name. */
   onBrowse: (query?: string) => void;
   onRefresh: () => void;
@@ -68,7 +69,7 @@ export function TrendBadge({ t }: { t: OwnedRow['trend'] }) {
   return <span className={`badge ${up ? 'up' : 'down'}`}>{up ? '▲' : '▼'} {Math.round(Math.abs(t.vsAvg) * 100)}%</span>;
 }
 
-export function HomeScreen({ db, dbStatus, collection, live, history, baselines, refreshing, onScan, onOpenBinder, onBrowse, onRefresh }: Props) {
+export function HomeScreen({ db, dbStatus, collection, live, history, baselines, refreshing, onScan, onOpenBinder, onDeleteBinder, onBrowse, onRefresh }: Props) {
   const [query, setQuery] = useState('');
   const allRows = db ? ownedRows(db, collection, live, history, baselines) : [];
   const rows = uniqueRows(allRows);
@@ -161,6 +162,16 @@ export function HomeScreen({ db, dbStatus, collection, live, history, baselines,
                   <div className="muted small">{b.cards.length} cards · scanned {b.updatedAt.slice(0, 10)}</div>
                 </div>
                 <span className="num">{db ? formatUSD(binderValue(b.name)) : ''}</span>
+                <button
+                  className="btn small danger"
+                  aria-label={`Delete ${b.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (confirm(`Delete “${b.name}” and its ${b.cards.length} cards from this phone? This can’t be undone.`)) onDeleteBinder(b.name);
+                  }}
+                >
+                  Delete
+                </button>
                 <span className="muted">›</span>
               </li>
             ))}

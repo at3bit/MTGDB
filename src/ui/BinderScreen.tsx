@@ -66,19 +66,19 @@ export function BinderScreen({ db, name, collection, live, history, baselines, o
       <div className="card">
         <div className="big-number">{formatUSD(total)}</div>
         <div className="row spread">
-          <span className="muted small">{rows.length} cards</span>
+          <span className="muted small grow">{rows.length} cards</span>
           <button className="btn small" onClick={() => exportCSV(rows, db, name)}>Export CSV</button>
+          <button
+            className="btn small danger"
+            onClick={() => {
+              if (confirm(`Delete “${name}” and its ${rows.length} cards from this phone? This can’t be undone.`)) onDelete();
+            }}
+          >
+            Delete binder
+          </button>
         </div>
       </div>
       <CardsView db={db} items={itemsFor(rows, db, false, [name])} storageKey="binder" defaultSort="price" />
-      <button
-        className="btn danger block"
-        onClick={() => {
-          if (confirm(`Delete “${name}” and its ${rows.length} cards from this phone?`)) onDelete();
-        }}
-      >
-        Delete binder
-      </button>
     </div>
   );
 }

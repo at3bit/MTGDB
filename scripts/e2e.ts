@@ -368,6 +368,18 @@ try {
   const fromPhotos = await reviewed();
   check(fromPhotos.spreads === 3 && fromPhotos.right >= 52, `photos (lined up on each): ${fromPhotos.spreads} spreads, ${fromPhotos.right}/${fromPhotos.total} pockets right`);
   await page.getByRole('button', { name: /Discard/ }).click();
+
+  // Delete a saved binder straight from the home screen's list (the confirm dialog is accepted).
+  await page.getByRole('button', { name: 'Delete Trade Binder' }).click();
+  await page.waitForTimeout(500);
+  const binderRows = await page.getByRole('button', { name: /^Delete / }).count();
+  const stored = await page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve) => { const r = indexedDB.open('keyval-store'); r.onsuccess = () => resolve(r.result); });
+    const keys = await new Promise<IDBValidKey[]>((resolve) => { const r = db.transaction('keyval').objectStore('keyval').getAllKeys(); r.onsuccess = () => resolve(r.result); });
+    const col = await Promise.all(keys.map((k) => new Promise<unknown>((resolve) => { const r = db.transaction('keyval').objectStore('keyval').get(k); r.onsuccess = () => resolve(r.result); })));
+    return JSON.stringify(col).includes('Trade Binder');
+  });
+  check(binderRows === 0 && !stored, `binder deleted from the home screen (${binderRows} left; still stored: ${stored})`);
 } catch (e) {
   failed = true;
   console.error(e);

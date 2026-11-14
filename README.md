@@ -153,6 +153,8 @@ link. Each person's collection is stored only on their own phone.
   and keeps everything captured up to then, rather than freezing.
 - Quantities aren't tracked: a binder stores one entry per printing (and
   finish), and the collection totals count each printing once.
+- **Delete a binder** from the home screen's binder list (Delete, then
+  confirm) or with Delete binder at the top of the binder's page.
 - **Do I own…?** on the home screen searches every binder; **Browse all**
   lists the whole collection with the same views, sorts and search.
 
