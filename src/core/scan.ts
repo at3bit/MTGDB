@@ -72,6 +72,11 @@ export interface TrackOptions {
   turns?: number[];
 }
 
+/** A page is turned if its cards come this much closer (mean fingerprint distance) another way up… */
+const TURN_CLOSER = 3.5;
+/** …and that way they are close enough to be real cards (the wrong way up averaged 36-41). */
+const TURN_MAX_MEAN = 37;
+
 // Retrying placements only when 2+ cards of a page are unidentified read the same as on any miss (simulated drifting binders) and costs less.
 export const DEFAULT_TRACK: TrackOptions = { retryBelow: 0.85, minGain: 2 };
 
@@ -105,7 +110,12 @@ export function recognizeTrackedSpread(
       const quad = turnQuad(outline.pages[p], turn);
       const res = recognizeSpread(frames, { ...base, pages: [quad] }, idx, cfg).map((r) => ({ ...r, page: p }));
       const rq = quality(res);
-      if (rq.matched >= best.q.matched + opts.minGain) best = { pockets: res, q: rq, turn };
+      // Clearly more cards identified, or cards clearly closer to real ones: read the wrong way up, cards
+      // match nothing in particular (mean distance 36-41 on 30 real pages), while the right way, even before
+      // the outline is fitted, came 4-20 closer on 29 of them. Counting confident matches alone got 3 of
+      // those pages backwards: a wrong way up can turn up a couple of chance "matches".
+      const closer = rq.meanDistance <= best.q.meanDistance - TURN_CLOSER && rq.meanDistance <= TURN_MAX_MEAN;
+      if (rq.matched >= best.q.matched + opts.minGain || closer) best = { pockets: res, q: rq, turn };
     }
     if (best.turn !== turns[p]) {
       turns[p] = best.turn;

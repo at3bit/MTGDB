@@ -38,16 +38,20 @@ link. Each person's collection is stored only on their own phone.
    cards, and carries it through the run. On real photos taken with the binder
    upside down, all 36 pockets were wrong without this; with it, all 23 cards
    were named right and all 13 blank fillers read as empty.
-   Before the outline is fitted to the cards, a page can read poorly either
-   way up, so when no turn is clearly better unfitted, the app also fits the
-   outline both ways up (each way separately: the fit follows the cards' name
-   bar and type line) and turns the page if upside down then reads clearly
-   better. On 15 more real pages, each read on its own (110 cards, 25 blank
-   fillers), the turn was missed on 5 pages before (66 cards named right, 5
-   confidently wrong) and on 1 after (90 named right, none confidently
-   wrong; the missed page has 4 cards, 3 of them glossy foils). In a run the
-   turn carries over from the previous page anyway. It costs time only on
-   pages that read badly (57 s -> 69 s for the 15 pages in Node).
+   Which way is better is judged by how close the cards come to real ones
+   (mean fingerprint distance), not only by how many are identified for sure:
+   on 30 real pages (227 cards, 43 blank fillers), read the wrong way up the
+   cards averaged 36-41 (they match nothing in particular), the right way
+   4-20 closer on 29 of them, while counting sure matches got 3 pages
+   backwards (a wrong way up can turn up a couple of chance "matches"). A page
+   turns if its cards come 3.5 closer and within 37. If neither settles it,
+   the outline is also fitted both ways up (separately: the fit follows the
+   name bar and type line) and compared. Each page read on its own: before,
+   the turn was missed on 5 of the first 15 (66 of 110 cards named right, 5
+   confidently wrong); now on 1 of the 30 (193 of 227 named right, none
+   confidently wrong). The page still missed has 4 cards, 3 of them glossy
+   foils, and reads badly either way; in a run the turn carries over from the
+   previous page. With the outline given the right way up, no page is turned.
    The outline itself: One outline
    with four corners, around the page, or around both pages of an open binder
    with a handle for the gap at the spine. It stays where you put it: each
