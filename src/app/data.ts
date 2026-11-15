@@ -2,7 +2,7 @@
 import { CardDB, decodeFingerprints, type CardsFile } from '../core/carddb.ts';
 import { Baselines } from '../core/baselines.ts';
 import type { Calibration } from '../core/geometry.ts';
-import type { WireImage, WirePocket, WorkerRequest, WorkerResponse } from './protocol.ts';
+import type { Frame, WirePocket, WorkerRequest, WorkerResponse } from './protocol.ts';
 
 /** Where the data files live. `?db=some/path` overrides it (used by the end-to-end test). */
 export function dataBase(): string {
@@ -139,6 +139,8 @@ export class Recognizer {
   inFlight = 0;
   /** How many times the worker had to be restarted (it crashed, or hung). */
   restarts = 0;
+  /** The worker reads frames handed over as ImageBitmaps (known once it's ready). */
+  acceptsBitmaps = false;
 
   constructor(private db: CardDB) {
     this.spawn();
@@ -149,7 +151,10 @@ export class Recognizer {
     this.worker = worker;
     this.ready = new Promise((resolve, reject) => {
       worker.addEventListener('message', (ev: MessageEvent<WorkerResponse>) => {
-        if (ev.data.type === 'ready') resolve();
+        if (ev.data.type === 'ready') {
+          this.acceptsBitmaps = !!ev.data.bitmaps;
+          resolve();
+        }
         else if (ev.data.type === 'error' && ev.data.job === undefined) reject(new Error(ev.data.message));
       });
     });
@@ -192,7 +197,7 @@ export class Recognizer {
    * `calibration` is the user's outline; spreads with the same `runId` are tracked from one to the next.
    * A `tentative` capture comes back `discarded` if it reads as junk.
    */
-  async recognize(frames: WireImage[], calibration: Calibration, runId: number, tentative = false) {
+  async recognize(frames: Frame[], calibration: Calibration, runId: number, tentative = false) {
     await this.ready;
     const job = this.nextJob++;
     this.inFlight++;
@@ -200,7 +205,7 @@ export class Recognizer {
       const timer = setTimeout(() => this.restart('the card reader stopped responding'), JOB_TIMEOUT_MS);
       this.pending.set(job, { resolve, reject, timer });
       const msg: WorkerRequest = { type: 'spread', job, runId, frames, calibration, tentative };
-      this.worker.postMessage(msg, frames.map((f) => f.buffer));
+      this.worker.postMessage(msg, frames.map((f) => ('buffer' in f ? f.buffer : f)));
     });
   }
 

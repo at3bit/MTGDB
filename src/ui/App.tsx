@@ -62,6 +62,9 @@ export function App() {
   const recognizer = useRef<Recognizer | null>(null);
   const spreadsRef = useRef<Spread[]>([]);
   const ocrChain = useRef<Promise<void>>(Promise.resolve());
+  /** A scan is running: name reading waits (see runOcr). */
+  const scanning = useRef(false);
+  const ocrQueue = useRef<(() => Promise<void>)[]>([]);
 
   const commitSpreads = (next: Spread[]) => {
     spreadsRef.current = next;
@@ -107,7 +110,12 @@ export function App() {
     (key: number, crop: NonNullable<PocketView['nameCrop']>) => {
       if (!db) return;
       setOcrPending((n) => n + 1);
-      ocrChain.current = ocrChain.current.then(async () => {
+      const job = async () => {
+        // The pocket may be gone (its photo was read again after Pause & adjust).
+        if (!spreadsRef.current.some((s) => s.pockets.some((p) => (p as KeyedPocket).key === key))) {
+          setOcrPending((n) => n - 1);
+          return;
+        }
         try {
           const { readCardName } = await import('../app/ocr.ts');
           const { text } = await readCardName(crop);
@@ -122,20 +130,38 @@ export function App() {
         } finally {
           setOcrPending((n) => n - 1);
         }
-      });
+      };
+      // While a scan runs, names are read afterwards: the phone's time goes to the scan (and to taps on Pause).
+      if (scanning.current) ocrQueue.current.push(job);
+      else ocrChain.current = ocrChain.current.then(job);
     },
     [db],
   );
 
+  /** The scan ended: read the names held back during it. */
+  const flushOcr = () => {
+    scanning.current = false;
+    for (const job of ocrQueue.current.splice(0)) ocrChain.current = ocrChain.current.then(job);
+  };
+
   const onSpread = useCallback(
-    (r: { pockets: WirePocket[]; time: number; retried?: number[]; change?: number; manual?: boolean; ms?: number; calibration?: Calibration }, pps: number) => {
+    (r: { pockets: WirePocket[]; time: number; retried?: number[]; change?: number; manual?: boolean; ms?: number; calibration?: Calibration; photo?: number }, pps: number) => {
       if (!db) return;
       setPagesPerSpread(pps);
       diagnostics.addReading(r, db);
       const pockets: KeyedPocket[] = r.pockets.map((p) => ({ ...toPocketView(p, db), key: ++pocketKeys }));
       const prev = spreadsRef.current;
-      const next = addReading(prev, { pockets, time: r.time, change: r.change ?? Infinity, manual: !!r.manual }, pps, db, sessionCfg.current);
+      // A photo read again after Pause & adjust replaces its earlier (misaligned) reading.
+      const redo = r.photo !== undefined ? prev.findIndex((s) => s.photo === r.photo) : -1;
+      if (redo >= 0) {
+        const replaced = prev.map((s, i) => (i === redo ? { ...s, pockets } : s));
+        commitSpreads(markGhosts(replaced, pps, db, sessionCfg.current));
+        for (const p of pockets) if (needsOcr(p) && !p.cardBack) runOcr(p.key, p.nameCrop!);
+        return;
+      }
+      let next = addReading(prev, { pockets, time: r.time, change: r.change ?? Infinity, manual: !!r.manual }, pps, db, sessionCfg.current);
       const repeat = next.length === prev.length && prev.length > 0;
+      if (!repeat && r.photo !== undefined) next = next.map((s, i) => (i === next.length - 1 ? { ...s, photo: r.photo } : s));
       setRunStats((s) => ({ captures: s.captures + 1, repeats: s.repeats + (repeat ? 1 : 0), reread: s.reread + (r.retried?.length ?? 0) }));
       commitSpreads(next);
       for (const p of pockets) if (needsOcr(p) && !p.cardBack) runOcr(p.key, p.nameCrop!);
@@ -230,6 +256,7 @@ export function App() {
               recognizer.current?.updateAllowed();
             }
             sessionCfg.current = { ...DEFAULT_SESSION, seeThrough: !options.blankFillers };
+            scanning.current = true;
             diagnostics.note('scanOptions', options);
             releasePhotos();
             commitSpreads([]);
@@ -245,8 +272,14 @@ export function App() {
           recognizer={recognizer.current}
           spreadsSoFar={spreads.length}
           onSpread={onSpread}
-          onDone={() => setScreen({ name: 'review', binder: screen.binder, fresh: true })}
-          onCancel={() => setScreen({ name: 'home' })}
+          onDone={() => {
+            flushOcr();
+            setScreen({ name: 'review', binder: screen.binder, fresh: true });
+          }}
+          onCancel={() => {
+            flushOcr();
+            setScreen({ name: 'home' });
+          }}
         />
       )}
       {screen.name === 'review' && db && (

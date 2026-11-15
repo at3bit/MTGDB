@@ -2,6 +2,9 @@ import type { Calibration } from '../core/geometry.ts';
 import type { Match } from '../core/fingerprint.ts';
 import type { PocketStatus } from '../core/recognize.ts';
 
+/** A frame on its way to the worker. */
+export type Frame = WireImage | ImageBitmap;
+
 export interface WireImage {
   width: number;
   height: number;
@@ -14,7 +17,8 @@ export type WorkerRequest =
   | { type: 'allowed'; allowed: Uint8Array | null; preferred: Uint8Array | null }
   /** `runId` groups the spreads of one run so the worker can follow the pages from one spread to the next. */
   /** `tentative`: taken from a pause too short to settle; dropped (`discarded`) if it reads as junk. */
-  | { type: 'spread'; job: number; runId: number; frames: WireImage[]; calibration: Calibration; tentative?: boolean };
+  /** Frames as pixels, or as ImageBitmaps (the worker reads their pixels itself, off the page's thread). */
+  | { type: 'spread'; job: number; runId: number; frames: Frame[]; calibration: Calibration; tentative?: boolean };
 
 export interface WirePocket {
   page: number;
@@ -39,6 +43,7 @@ export interface WirePocket {
 }
 
 export type WorkerResponse =
-  | { type: 'ready' }
+  /** `bitmaps`: the worker can take frames as ImageBitmaps. */
+  | { type: 'ready'; bitmaps?: boolean }
   | { type: 'spread'; job: number; pockets: WirePocket[]; ms: number; calibration: Calibration; retried: number[]; discarded?: boolean; turns?: number[] }
   | { type: 'error'; job?: number; message: string };

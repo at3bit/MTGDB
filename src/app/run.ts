@@ -7,7 +7,7 @@ import { focusPatches, type FocusPatch } from '../core/focus.ts';
 import { calibrationBounds, type Calibration } from '../core/geometry.ts';
 import { FrameReader, type FrameSource } from './capture.ts';
 import type { Recognizer, SpreadReading } from './data.ts';
-import type { WireImage } from './protocol.ts';
+import type { Frame } from './protocol.ts';
 
 /**
  * 'auto': capture whenever the page settles after a turn. 'manual': only when snap() is called.
@@ -29,6 +29,8 @@ export interface RunStatus {
 export interface SentFrames {
   /** Canvases holding the frames (read them synchronously; they're reused). */
   canvases: HTMLCanvasElement[];
+  /** The original files, for photos (no need to re-encode those). */
+  files?: Blob[];
   time: number;
   /** Focus score per page of the frames sent. */
   focus: number[];
@@ -47,7 +49,8 @@ export interface RunEvents {
    * leave it out): because the user paused, because every photo is lined up, or because this one is a different shape.
    */
   lineUp?(index: number, count: number, reason: 'paused' | 'each' | 'shape'): void;
-  spread(r: SpreadReading & { time: number; change: number; manual: boolean }): void;
+  /** `photo`: which photo of a batch it came from; a photo read again (after Pause & adjust) replaces its earlier reading. */
+  spread(r: SpreadReading & { time: number; change: number; manual: boolean; photo?: number }): void;
   error(e: Error): void;
 }
 
@@ -69,6 +72,13 @@ export class RunController {
   private patches: FocusPatch[] = [];
   /** Photos: stop on every photo to line up the outline (off: the outline from the start is used until a pause). */
   lineUpEach = false;
+  /** Photos: the photo to go back to after a pause (the one on screen when Pause was tapped). */
+  private rewindTo: number | null = null;
+  /** Captures handed to the recognizer and not read yet. */
+  private reading = 0;
+  /** Captures are handed over in order (turning a frame into an ImageBitmap is async). */
+  private sendChain: Promise<void> = Promise.resolve();
+  private lastStatus = { at: 0, phase: '' };
   private skipping = false;
   private mode_: CaptureMode;
 
@@ -100,6 +110,8 @@ export class RunController {
   /** Stops sampling (an uploaded video stays on its current frame) until resume(). */
   pause() {
     this.paused = true;
+    // Photos: go back to the one on screen when the user tapped, so it's read again with the adjusted outline.
+    if (this.src.kind === 'photos' && this.rewindTo === null) this.rewindTo = this.src.index ?? null;
   }
 
   /** Continues; with a new outline, page tracking starts again from it. */
@@ -168,7 +180,7 @@ export class RunController {
         }
       }
       // Uploaded videos can wait for the recognizer (a live camera can't); pausing or stopping doesn't wait.
-      if (this.src.kind === 'file') while (this.running && !this.paused && this.rec.inFlight >= 2) await sleep(50);
+      if (this.src.kind === 'file') while (this.running && !this.paused && this.reading >= 2) await sleep(50);
     }
     try {
       this.send(this.policy.flush());
@@ -180,46 +192,59 @@ export class RunController {
     this.status('done');
   }
 
-  /** Photos: each one is a capture. The outline from the first photo is used for all, or lined up on each. */
+  /**
+   * Photos: each one is a capture, read one at a time with the outline set at the start. Pause stops at
+   * once and goes back to the photo on screen; after the outline is adjusted that photo is read again
+   * (replacing its earlier reading) and the batch carries on from there.
+   */
   private async runPhotos() {
+    const count = this.src.count ?? 0;
     const shape = this.src.width / this.src.height;
     const wait = async () => {
       this.status('paused');
       await new Promise<void>((resolve) => (this.wake = resolve));
       this.wake = null;
     };
+    let next = 0;
     while (this.running) {
+      if (this.paused && this.rewindTo !== null) next = Math.min(next, this.rewindTo);
+      this.rewindTo = null;
+      if (next >= count) break;
       try {
-        if (!(await this.src.next())) break;
+        await this.src.show!(next);
       } catch (e) {
         this.endedEarly = e instanceof Error ? e : new Error(String(e));
         this.on.error(this.endedEarly);
         break;
       }
-      const index = this.src.index ?? 0;
+      if (this.paused && this.rewindTo !== null && this.rewindTo < next) continue; // paused while it loaded
       // A photo of a different shape (portrait vs landscape) needs its own outline.
       const reshaped = Math.abs(this.src.width / this.src.height - shape) > 0.02;
-      // The outline set at the start is used for every photo, until the user pauses to adjust it.
       const userPaused = this.paused;
-      if (userPaused || ((this.lineUpEach || reshaped) && index > 0)) {
+      if (userPaused || ((this.lineUpEach || reshaped) && next > 0)) {
         this.paused = true;
-        this.on.lineUp?.(index, this.src.count ?? 1, reshaped ? 'shape' : userPaused && !this.lineUpEach ? 'paused' : 'each');
+        this.rewindTo = null;
+        this.on.lineUp?.(next, count, reshaped ? 'shape' : userPaused && !this.lineUpEach ? 'paused' : 'each');
         await wait();
+        this.rewindTo = null;
         if (!this.running) break;
       }
       if (this.skipping) {
         this.skipping = false;
+        next++;
         continue;
       }
       try {
         this.layout();
         this.reader.keep(this.src, 0);
-        this.send({ slots: [0], time: index, change: Infinity, manual: true, brief: false, focus: [] });
+        this.send({ slots: [0], time: next, change: Infinity, manual: true, brief: false, focus: [] }, this.src.file?.(next));
         this.status('settled');
       } catch (e) {
         this.on.error(e instanceof Error ? e : new Error(String(e)));
       }
-      while (this.running && this.rec.inFlight >= 2) await sleep(50);
+      next++;
+      // One photo at a time, so a pause catches the photo on screen rather than a queue of them.
+      while (this.running && !this.paused && this.reading > 0) await sleep(30);
     }
     this.status('finishing');
     await Promise.all(this.jobs);
@@ -248,42 +273,52 @@ export class RunController {
     this.status(this.policy.state === 'moving' ? 'moving' : step.send ? 'settled' : 'watching');
   }
 
-  private send(s: CaptureSend | null) {
+  private send(s: CaptureSend | null, file?: Blob) {
     if (!s || !s.slots.length) return;
-    this.on.sent?.({ canvases: s.slots.map((slot) => this.reader.slotCanvas(slot)!), time: s.time, focus: s.focus, manual: s.manual, brief: s.brief });
-    const frames = this.reader.read(s.slots);
+    const canvases = s.slots.map((slot) => this.reader.slotCanvas(slot)!);
+    this.on.sent?.({ canvases: file ? [] : canvases, files: file ? [file] : undefined, time: s.time, focus: s.focus, manual: s.manual, brief: s.brief });
+    // Hand the frames over as ImageBitmaps where the worker can read them: copying a 12 MP photo's pixels out
+    // of a canvas here would hold up the page (and taps on Pause) for a noticeable moment. The bitmaps are
+    // snapshots taken now, so the canvases can be reused straight away.
+    const frames: Promise<Frame[]> =
+      this.rec.acceptsBitmaps && typeof createImageBitmap === 'function'
+        ? Promise.all(canvases.map((c) => createImageBitmap(c)))
+        : Promise.resolve(this.reader.read(s.slots));
     // A Snap clicked when tapped; a quick-pause capture clicks once it's known to show a page.
     if (!s.manual && !s.brief) this.on.captured?.('auto');
-    this.dispatch(frames, s);
-  }
-
-  private dispatch(frames: WireImage[], s: CaptureSend) {
     this.captured++;
-    this.jobs.push(
-      this.rec
-        .recognize(frames, this.cal, this.runId, s.brief)
-        .then((r) => {
-          if (r.discarded) {
-            this.captured--;
-            return;
-          }
-          if (s.brief) this.on.captured?.('auto');
-          this.on.spread({ ...r, time: s.time, change: s.change, manual: s.manual });
-        })
-        .catch((e) => {
+    this.reading++;
+    const photo = this.src.kind === 'photos' ? s.time : undefined;
+    const job = (this.sendChain = this.sendChain.then(async () => {
+      try {
+        const r = await this.rec.recognize(await frames, this.cal, this.runId, s.brief);
+        if (r.discarded) {
           this.captured--;
-          this.on.error(e);
-        }),
-    );
+          return;
+        }
+        if (s.brief) this.on.captured?.('auto');
+        this.on.spread({ ...r, time: s.time, change: s.change, manual: s.manual, photo });
+      } catch (e) {
+        this.captured--;
+        this.on.error(e instanceof Error ? e : new Error(String(e)));
+      } finally {
+        this.reading--;
+      }
+    }));
+    this.jobs.push(job);
   }
 
+  /** Progress for the screen; at most 5 times a second unless the phase changes (re-rendering costs the page time). */
   private status(phase: RunStatus['phase']) {
+    const now = performance.now();
+    if (phase === this.lastStatus.phase && now - this.lastStatus.at < 200) return;
+    this.lastStatus = { at: now, phase };
     this.on.status({
       phase,
       motion: this.policy.watcher.lastDiff,
       progress: this.src.progress(),
       captured: this.captured,
-      processing: this.rec.inFlight,
+      processing: this.reading,
     });
   }
 }

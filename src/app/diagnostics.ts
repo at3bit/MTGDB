@@ -50,6 +50,10 @@ class Diagnostics {
   /** Keeps a JPEG copy of each frame of a capture (canvases are copied synchronously; they get reused). */
   addFrames(f: SentFrames) {
     this.seq++;
+    // Photos: keep the original files (no drawing or re-encoding on the page's thread).
+    for (const [i, file] of (f.files ?? []).entries()) {
+      this.frames.push({ name: `frames/${String(this.seq).padStart(3, '0')}-photo${f.time + 1}-${i}.jpg`, blob: Promise.resolve(file), time: f.time, focus: f.focus, manual: f.manual, brief: f.brief });
+    }
     f.canvases.forEach((src, i) => {
       const scale = Math.min(1, MAX_WIDTH / src.width);
       const c = document.createElement('canvas');

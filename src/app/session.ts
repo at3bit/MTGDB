@@ -69,6 +69,8 @@ export interface Spread {
   /** Seconds into the run when it was captured. */
   time: number;
   pockets: PocketView[];
+  /** The photo of a batch it was read from (a photo read again replaces this spread's reading). */
+  photo?: number;
 }
 
 /** Object URLs of review photos, released when a scan is discarded or replaced (releasePhotos). */

@@ -134,8 +134,14 @@ link. Each person's collection is stored only on their own phone.
 
 - **Upload photos** (most accurate): pick all the photos at once, in page
   order. Line up the outline on the first and tap Read: the whole batch runs
-  with that outline, without stopping. **Pause & adjust** stops on the next
-  photo; the outline you set then is used for it and every photo after it.
+  with that outline, without stopping, one photo at a time. **Pause & adjust**
+  stops at once on the photo on screen; after you adjust the outline that
+  photo is read again (its misaligned reading is replaced) and the outline is
+  used for every photo after it. (Measured with the CPU slowed 4x: Pause used
+  to take effect after 8.7 s, with photos queued behind it; now 0.07 s.)
+  Card names are read once the batch is done, so the scan gets the phone's
+  time, and photos go to the recognizer as images whose pixels it reads
+  itself, not copied out on the page's thread.
   **Stop on each photo to adjust the outline** (off by default; for photos
   taken by hand) stops on every photo instead, with Use this photo / Skip. A
   photo of a different shape (portrait vs landscape) always stops.

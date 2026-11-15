@@ -361,14 +361,21 @@ try {
   await page.getByRole('button', { name: 'Read 6 photos' }).waitFor({ timeout: 20000 });
   await page.screenshot({ path: join(out, '13-photos-lineup.png') });
   await page.getByRole('button', { name: 'Read 6 photos' }).click();
+  await page.locator('.status-pill', { hasText: /Photo [2-5] of 6/ }).waitFor({ timeout: 30000 });
+  const onScreen = Number((await page.locator('.status-pill').textContent())?.match(/Photo (\d+) of/)?.[1]);
+  const tapped = Date.now();
   await page.getByRole('button', { name: 'Pause & adjust' }).click();
-  const stoppedAt = page.getByRole('heading', { name: /^Photo [2-6] of 6$/ });
+  const stoppedAt = page.getByRole('heading', { name: /^Photo \d of 6$/ });
   await stoppedAt.waitFor({ timeout: 30000 });
-  const stop = await stoppedAt.textContent();
+  const latency = Date.now() - tapped;
+  const stop = Number((await stoppedAt.textContent())?.match(/Photo (\d)/)?.[1]);
   await page.getByRole('button', { name: 'Continue' }).click();
   await page.getByText('Review “Photo Binder”').waitFor({ timeout: 120000 });
   const fromPhotos = await reviewed();
-  check(fromPhotos.spreads === 3 && fromPhotos.right >= 52, `photo batch runs without stopping; Pause & adjust stopped once (${stop}), then ${fromPhotos.spreads} spreads, ${fromPhotos.right}/${fromPhotos.total} pockets right`);
+  check(
+    stop <= onScreen + 1 && fromPhotos.spreads === 3 && fromPhotos.right >= 52,
+    `photo batch: Pause & adjust stopped on photo ${stop} (photo ${onScreen} was on screen; ${latency} ms), that photo was read again, then ${fromPhotos.spreads} spreads, ${fromPhotos.right}/${fromPhotos.total} pockets right`,
+  );
   await page.getByRole('button', { name: /Discard/ }).click();
 
   // Delete a saved binder straight from the home screen's list (the confirm dialog is accepted).

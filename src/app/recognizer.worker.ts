@@ -4,7 +4,7 @@ import { DEFAULT_RECOGNIZE, type MatchIndex } from '../core/recognize.ts';
 import { DEFAULT_TRACK, isJunkReading, recognizeTrackedSpread } from '../core/scan.ts';
 import type { Calibration } from '../core/geometry.ts';
 import type { RGBAImage } from '../core/image.ts';
-import type { WorkerRequest, WorkerResponse, WirePocket } from './protocol.ts';
+import type { Frame, WorkerRequest, WorkerResponse, WirePocket } from './protocol.ts';
 
 let index: MatchIndex | null = null;
 /** Where the pages were on the last spread of the current run. */
@@ -29,6 +29,25 @@ async function jpeg(img: { width: number; height: number; data: Uint8ClampedArra
   }
 }
 
+/** Whether frames can come as ImageBitmaps: reading their pixels here keeps that work off the page's thread. */
+const canReadBitmaps = (() => {
+  try {
+    return typeof OffscreenCanvas !== 'undefined' && !!new OffscreenCanvas(1, 1).getContext('2d');
+  } catch {
+    return false;
+  }
+})();
+
+function pixelsOf(f: Frame): RGBAImage {
+  if ('buffer' in f) return { width: f.width, height: f.height, data: new Uint8ClampedArray(f.buffer) };
+  const { width, height } = f; // (a closed ImageBitmap reports 0 x 0)
+  const ctx = new OffscreenCanvas(width, height).getContext('2d', { willReadFrequently: true })!;
+  ctx.drawImage(f, 0, 0);
+  const img = ctx.getImageData(0, 0, width, height);
+  f.close();
+  return { width, height, data: img.data };
+}
+
 // One message at a time, so spreads come back in the order they were sent (photo encoding is async).
 let queue: Promise<void> = Promise.resolve();
 self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
@@ -40,7 +59,7 @@ async function handle(ev: MessageEvent<WorkerRequest>) {
   try {
     if (msg.type === 'init') {
       index = { fps: msg.fps, count: msg.count, nameOf: msg.nameOf, back: msg.back, allowed: msg.allowed ?? null, preferred: msg.preferred ?? null };
-      post({ type: 'ready' });
+      post({ type: 'ready', bitmaps: canReadBitmaps });
       return;
     }
     if (msg.type === 'allowed') {
@@ -53,7 +72,7 @@ async function handle(ev: MessageEvent<WorkerRequest>) {
     if (msg.type === 'spread') {
       if (!index) throw new Error('recognizer not initialised');
       const t0 = performance.now();
-      const frames: RGBAImage[] = msg.frames.map((f) => ({ width: f.width, height: f.height, data: new Uint8ClampedArray(f.buffer) }));
+      const frames: RGBAImage[] = msg.frames.map(pixelsOf);
       const same = tracking?.runId === msg.runId ? tracking : null;
       const prev = same?.calibration;
       // Every card's title line comes back, so its name can be read as a cross-check of the image match.

@@ -13,6 +13,10 @@ export interface FrameSource {
   /** Photos: the one showing (0-based) and how many there are. */
   readonly index?: number;
   readonly count?: number;
+  /** Photos: show photo `k` (to read it, or to go back to it). */
+  show?(k: number): Promise<void>;
+  /** Photos: the original file of photo `k`. */
+  file?(k: number): Blob;
   /** Advance to the next sample. Resolves false when the source has ended. */
   next(): Promise<boolean>;
   /** 0..1 for files; NaN for the camera. */
@@ -179,19 +183,27 @@ export async function openPhotos(img: HTMLImageElement, files: File[]): Promise<
     url = next;
   };
   await show(0);
+  let shown = 0;
   return {
     kind: 'photos',
     media: img,
     get width() { return img.naturalWidth; },
     get height() { return img.naturalHeight; },
-    get index() { return Math.max(0, i); },
+    get index() { return shown; },
     count: files.length,
     async next() {
       if (stopped || i + 1 >= files.length) return false;
       i++;
-      if (i > 0) await show(i);
+      if (i !== shown) await show(i);
+      shown = i;
       return !stopped;
     },
+    async show(k: number) {
+      if (k !== shown) await show(k);
+      shown = k;
+      i = k;
+    },
+    file: (k: number) => files[k],
     progress: () => Math.max(0, i + 1) / files.length,
     time: () => Math.max(0, i),
     stop() {
