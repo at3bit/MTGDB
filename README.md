@@ -163,6 +163,24 @@ link. Each person's collection is stored only on their own phone.
   finish), and the collection totals count each printing once.
 - **Delete a binder** from the home screen's binder list (Delete, then
   confirm) or with Delete binder at the top of the binder's page.
+- **Autosave**: a scan in progress is saved on the phone (IndexedDB) as each
+  photo is read, after every 5 Save + continue taps, when the scan finishes
+  and whenever the app goes to the background. If the app crashes or iOS
+  closes it, the home screen offers **Resume** (the photos, readings and
+  cards checked so far come back, and the card check carries on from the
+  first unchecked card) or Discard. Saving the binder or discarding the scan
+  forgets the autosave. Each card's photo is written once; later saves only
+  rewrite the small list of readings.
+- **Add to a binder** saved earlier: scan under the same name and choose
+  **Add to its N cards** (the default) to append the new pages after its
+  existing ones (printings it already has aren't added twice), or
+  **Replace them**. A big binder can be scanned in several sittings this way.
+- Memory, for big binders (a crash at about 450 of 900 cards on an iPhone):
+  the name strip of each card is kept as a small JPEG (not raw pixels) and
+  dropped once read; each card keeps its 12 closest matches (not all of
+  them); the name reader (Tesseract) is restarted every 120 reads, because its
+  memory only grows; the pages aren't drawn under the card check, and their
+  photos load as they're scrolled to.
 - **Do I own…?** on the home screen searches every binder; **Browse all**
   lists the whole collection with the same views, sorts and search.
 

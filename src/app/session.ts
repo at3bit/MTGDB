@@ -14,7 +14,12 @@ export interface PocketView {
   otherNameDistance: number;
   thumbUrl: string;
   query?: Uint32Array;
-  nameCrop?: WireImage;
+  /** Title-line crop for reading the name (pixels, or a JPEG). Dropped once a matched card's name is read. */
+  nameCrop?: WireImage | Blob;
+  /** The review photo itself (thumbUrl points at it), kept so an unfinished scan can be saved (see draft.ts). */
+  photo?: Blob;
+  /** Stable id of this pocket reading, for the saved draft. */
+  pid?: string;
   /** Chosen card (index into the CardDB), or null for empty / unidentified. */
   chosen: number | null;
   finish: Finish;
@@ -73,9 +78,17 @@ export interface Spread {
   photo?: number;
 }
 
+const MAX_MATCHES = 12;
+let pidCount = 0;
+const pidRun = Date.now().toString(36);
+/** A new stable pocket-reading id. */
+export function newPid(): string {
+  return `${pidRun}-${(pidCount++).toString(36)}`;
+}
+
 /** Object URLs of review photos, released when a scan is discarded or replaced (releasePhotos). */
 const photoUrls: string[] = [];
-function photoUrl(blob: Blob): string {
+export function photoUrl(blob: Blob): string {
   const url = URL.createObjectURL(blob);
   photoUrls.push(url);
   return url;
@@ -93,11 +106,14 @@ export function toPocketView(p: WirePocket, db: CardDB): PocketView {
       page: p.page,
       slot: p.slot,
       status: p.status,
-      matches: p.matches,
+      // The best few candidates are all the review uses (a big binder holds hundreds of pockets).
+      matches: p.matches.slice(0, MAX_MATCHES),
       otherNameDistance: p.otherNameDistance,
       thumbUrl: p.thumbJpeg ? photoUrl(p.thumbJpeg) : p.thumb ? imageToDataURL(p.thumb) : '',
+      photo: p.thumbJpeg,
+      pid: newPid(),
       query: p.query ? Uint32Array.from(p.query) : undefined,
-      nameCrop: p.nameCrop,
+      nameCrop: p.nameJpeg ?? p.nameCrop,
       chosen,
       finish: 'nonfoil',
       via: chosen === null ? null : 'image',
@@ -355,7 +371,8 @@ export function applyOcr(p: PocketView, text: string, db: CardDB): PocketView {
     const imageName = db.nameOf[p.chosen];
     if (top && top.score >= 0.45 && top.name === imageName) return { ...p, ocrText: text, nameCheck: 'agrees', nameCrop: undefined };
     if (strongRead && top.name !== imageName) return { ...p, ocrText: text, nameCheck: 'differs', readName: top.name, status: 'uncertain' };
-    return { ...p, ocrText: text, nameCheck: 'unread' };
+    // The image match stands; the crop isn't needed again (memory adds up over a big binder).
+    return { ...p, ocrText: text, nameCheck: 'unread', nameCrop: undefined };
   }
   if (!top || top.score < 0.45) return { ...p, ocrText: text, nameCheck: 'unread' };
   // The text agrees with one of the image candidates, or is a clean read on its own.

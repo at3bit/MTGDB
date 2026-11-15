@@ -210,7 +210,8 @@ try {
   console.log(`  total shown ${shownTotal}, expected $${expectedTotal.toFixed(2)} if all correct`);
 
   // Review photos are cut straight from the frame (not the old 146-px thumbnails), as compact JPEG files.
-  await page.waitForFunction(() => [...document.querySelectorAll('.tile img')].every((i) => (i as HTMLImageElement).complete));
+  // (Tiles further down load as they're scrolled to.)
+  await page.waitForFunction(() => { const i = document.querySelector('.tile img') as HTMLImageElement | null; return !!i && i.complete; });
   const photo = await page.locator('.tile img').first().evaluate((img: HTMLImageElement) => ({ w: img.naturalWidth, url: img.src.slice(0, 5) }));
   check(photo.w > 146 && photo.url === 'blob:', `review photos cut from the frame: ${photo.w} px wide (was 146), ${photo.url} URLs`);
   // Diagnostics: the captured photos and readings, as a zip.
@@ -308,7 +309,7 @@ try {
     const pages = page.getByRole('button', { name: '‹ Pages' });
     if (await pages.count()) await pages.click();
     const spreads = await page.locator('strong', { hasText: /^Spread \d+$/ }).count();
-    const names: string[] = await page.locator('.tile').evaluateAll((els: Element[]) => els.map((e) => e.querySelector('.name')?.textContent ?? ''));
+    const names: string[] = await page.locator('.tile').evaluateAll((els: Element[]) => els.map((e) => (e.querySelector('.name')?.textContent ?? '').replace(/^✓ /, '')));
     return { spreads, right: names.filter((n, i) => n === expected[i]).length, total: names.length };
   };
 
@@ -328,9 +329,37 @@ try {
   await page.screenshot({ path: join(out, '10-upload-paused.png') });
   await page.getByRole('button', { name: 'Continue' }).click();
   await page.getByText('Review “Paused Run”').waitFor({ timeout: 120000 });
+
+  // Autosave: check 5 cards, then reload the page (as if the app crashed) and resume from the home screen.
+  const checkHeading = page.getByRole('heading', { name: /^Card \d+ of \d+$/ });
+  await checkHeading.waitFor({ timeout: 10000 });
+  const toCheck = Number((await checkHeading.textContent())?.match(/of (\d+)/)?.[1]);
+  for (let i = 0; i < 5; i++) await page.getByRole('button', { name: 'Save + continue' }).click();
+  await page.waitForTimeout(1000);
+  await page.reload();
+  const banner = page.getByTestId('resume');
+  await banner.waitFor({ timeout: 20000 });
+  const bannerText = (await banner.textContent()) ?? '';
+  await page.screenshot({ path: join(out, '10-resume-offer.png') });
+  await banner.getByRole('button', { name: 'Resume' }).click();
+  await checkHeading.waitFor({ timeout: 10000 });
+  const resumedAt = await checkHeading.textContent();
+  const yours = page.locator('.check-compare img[alt="Your card"]').first();
+  await page.waitForFunction(() => { const i = document.querySelector('img[alt="Your card"]') as HTMLImageElement | null; return !!i && i.complete && i.naturalWidth > 0; }, null, { timeout: 5000 }).catch(() => {});
+  const resumedImg = await yours.evaluate((img: HTMLImageElement) => ({ w: img.naturalWidth, src: img.src.slice(0, 5) })).catch((e: Error) => ({ w: 0, src: e.message.slice(0, 80) }));
+  const resumedPhoto = resumedImg.w > 0 && resumedImg.src === 'blob:';
+  if (!resumedPhoto) console.log('  resumed photo:', resumedImg);
+  check(
+    /Paused Run/.test(bannerText) && /5 checked/.test(bannerText) && resumedAt === `Card 6 of ${toCheck}` && resumedPhoto,
+    `autosave: after a reload the home screen offers "${bannerText.replace(/\s+/g, ' ').trim()}"; Resume opens ${resumedAt} with its photo`,
+  );
   const paused = await reviewed();
+  const ticked = await page.locator('.tile .name', { hasText: '✓' }).count();
   check(seeksPaused <= 1 && paused.spreads === 3 && paused.right >= 52, `pause & adjust mid-upload: video held while paused (${seeksPaused} seeks), then ${paused.spreads} spreads, ${paused.right}/${paused.total} pockets right`);
+  check(ticked === 5, `resumed scan keeps the 5 checked cards (${ticked} ticked)`);
   await page.getByRole('button', { name: /Discard/ }).click();
+  await page.getByRole('button', { name: 'Scan a binder' }).waitFor();
+  check((await page.getByTestId('resume').count()) === 0, 'discarding the scan forgets the autosave');
 
   // Safari sometimes drops a seek: the run asks again and carries on.
   await uploadRun('Dropped Seek', videoPath);
@@ -377,6 +406,28 @@ try {
     `photo batch: Pause & adjust stopped on photo ${stop} (photo ${onScreen} was on screen; ${latency} ms), that photo was read again, then ${fromPhotos.spreads} spreads, ${fromPhotos.right}/${fromPhotos.total} pockets right`,
   );
   await page.getByRole('button', { name: /Discard/ }).click();
+
+  // Scanning more of a binder saved earlier adds to it (the default) instead of replacing it.
+  const extraIds = Array.from({ length: 18 }, (_, i) => 250 + i);
+  const extraPath = join(out, 'photo-4.jpg');
+  {
+    const img = renderSpread(extraIds.map((id) => cards[id]), { width: W, height: H, seed: 103, noiseSeed: 600, noise: 2.5, blur: true, jitter: 0.012 }).frame;
+    await sharp(Buffer.from(img.data.buffer, img.data.byteOffset, img.data.byteLength), { raw: { width: img.width, height: img.height, channels: 4 } }).jpeg({ quality: 92 }).toFile(extraPath);
+  }
+  await page.getByRole('button', { name: 'Scan a binder' }).click();
+  await page.locator('input[type=text]').fill('Trade Binder');
+  const addBtn = page.getByRole('button', { name: /^Add to its \d+ cards$/ });
+  const had = Number((await addBtn.textContent())?.match(/\d+/)?.[0]);
+  const addByDefault = (await addBtn.getAttribute('class')) === 'on';
+  await page.setInputFiles('[data-testid=photo-input]', extraPath);
+  await page.getByRole('button', { name: 'Read 1 photo' }).click({ timeout: 20000 });
+  await page.getByText('Review “Trade Binder”').waitFor({ timeout: 120000 });
+  await reviewed();
+  await page.getByRole('button', { name: /^(Save now|Save binder)$/ }).click();
+  await page.getByRole('button', { name: 'Export CSV' }).waitFor({ timeout: 10000 });
+  const nowHas = Number((await page.getByTestId('cards-summary').textContent())?.match(/^(\d+) card/)?.[1]);
+  check(addByDefault && nowHas >= had + 16 && nowHas <= had + 18, `adding a scan to a saved binder: ${had} cards + 18 new -> ${nowHas}`);
+  await page.getByRole('button', { name: '‹ Home' }).click();
 
   // Delete a saved binder straight from the home screen's list (the confirm dialog is accepted).
   await page.getByRole('button', { name: 'Delete Trade Binder' }).click();
@@ -493,6 +544,8 @@ try {
   check(true, 'timer mode counts down and takes a shot');
   await cam.getByRole('button', { name: 'Finish' }).click();
   await cam.getByText('Review “Camera binder”').waitFor({ timeout: 60000 });
+  // The card-by-card check opens over the pages (which aren't drawn under it); close it to read them.
+  await cam.getByRole('button', { name: '‹ Pages' }).click({ timeout: 10000 });
   const camSpreads = await cam.locator('strong', { hasText: /^Spread \d+$/ }).count();
   const camTiles: string[] = await cam.locator('.tile .name').allTextContents();
   const want = spreadIds.slice(0, 2).flatMap((ids) => ids.map((id) => (id >= 0 ? `Synthetic Card ${String(id).padStart(3, '0')}` : 'Empty')));

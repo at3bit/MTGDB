@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { diagnostics } from '../app/diagnostics.ts';
+import { clearDraft, draftSummary, loadDraft, saveDraft, type DraftMeta, type DraftSummary } from '../app/draft.ts';
 import type { CardDB } from '../core/carddb.ts';
 import { loadBaselines, loadCardDB, MissingDataError, Recognizer } from '../app/data.ts';
 import type { Baselines } from '../core/baselines.ts';
@@ -49,6 +50,42 @@ export function App() {
   const [englishOnly, setEnglishOnlyState] = useState(readEnglishOnly);
   /** Review bookkeeping for the current scan (e.g. no see-through cards when empty sleeves hold blanks). */
   const sessionCfg = useRef<SessionConfig>(DEFAULT_SESSION);
+  /** The unfinished scan saved on the phone (offered on the home screen after a crash). */
+  const [draft, setDraft] = useState<DraftSummary | null>(null);
+  /** What the current scan is (saved with it, so it can be resumed). */
+  const scanMeta = useRef<DraftMeta | null>(null);
+  const checksSinceSave = useRef(0);
+  const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Saves the scan in progress to the phone (see draft.ts). */
+  const autosave = (delayMs = 0) => {
+    if (!scanMeta.current) return;
+    if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
+    autosaveTimer.current = setTimeout(() => {
+      autosaveTimer.current = null;
+      if (scanMeta.current && spreadsRef.current.length) void saveDraft({ ...scanMeta.current, pagesPerSpread: pagesRef.current, runStats: runStatsRef.current }, spreadsRef.current);
+    }, delayMs);
+  };
+  const pagesRef = useRef(2);
+  const runStatsRef = useRef({ captures: 0, repeats: 0, reread: 0 });
+  /** Done with the scan (saved as a binder, or discarded): forget the autosave. */
+  const endScan = () => {
+    scanMeta.current = null;
+    if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
+    setDraft(null);
+    void clearDraft();
+  };
+  // iOS may close a backgrounded app: save first.
+  useEffect(() => {
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') autosave();
+    };
+    document.addEventListener('visibilitychange', onHide);
+    window.addEventListener('pagehide', onHide);
+    return () => {
+      document.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('pagehide', onHide);
+    };
+  });
   const [live, setLive] = useState<LivePrices>({});
   const [history, setHistory] = useState<PriceHistory>({});
   const [baselines, setBaselines] = useState<Baselines | null>(null);
@@ -58,6 +95,8 @@ export function App() {
   const [ocrPending, setOcrPending] = useState(0);
   /** What happened during the last run, shown on the review screen. */
   const [runStats, setRunStats] = useState({ captures: 0, repeats: 0, reread: 0 });
+  pagesRef.current = pagesPerSpread;
+  runStatsRef.current = runStats;
   const [refreshing, setRefreshing] = useState<string | null>(null);
   const recognizer = useRef<Recognizer | null>(null);
   const spreadsRef = useRef<Spread[]>([]);
@@ -75,8 +114,9 @@ export function App() {
     (async () => {
       // Ask the browser not to clear saved binders when it runs low on space or the site goes unused for a while.
       navigator.storage?.persist?.().catch(() => {});
-      const [col, lp, hist] = await Promise.all([loadCollection(), loadLivePrices(), loadHistory()]);
+      const [col, lp, hist, unfinished] = await Promise.all([loadCollection(), loadLivePrices(), loadHistory(), draftSummary()]);
       setCollection(col);
+      setDraft(unfinished);
       setLive(lp);
       setHistory(hist);
       try {
@@ -157,6 +197,7 @@ export function App() {
         const replaced = prev.map((s, i) => (i === redo ? { ...s, pockets } : s));
         commitSpreads(markGhosts(replaced, pps, db, sessionCfg.current));
         for (const p of pockets) if (needsOcr(p) && !p.cardBack) runOcr(p.key, p.nameCrop!);
+        autosave(1500);
         return;
       }
       let next = addReading(prev, { pockets, time: r.time, change: r.change ?? Infinity, manual: !!r.manual }, pps, db, sessionCfg.current);
@@ -165,6 +206,7 @@ export function App() {
       setRunStats((s) => ({ captures: s.captures + 1, repeats: s.repeats + (repeat ? 1 : 0), reread: s.reread + (r.retried?.length ?? 0) }));
       commitSpreads(next);
       for (const p of pockets) if (needsOcr(p) && !p.cardBack) runOcr(p.key, p.nameCrop!);
+      autosave(1500);
     },
     [db, runOcr],
   );
@@ -172,6 +214,35 @@ export function App() {
   const updatePocket = (spreadId: number, pocket: PocketView) => {
     const next = spreadsRef.current.map((s) => (s.id === spreadId ? { ...s, pockets: s.pockets.map((p) => (p.page === pocket.page && p.slot === pocket.slot ? pocket : p)) } : s));
     commitSpreads(db ? markGhosts(next, pagesPerSpread, db, sessionCfg.current) : next);
+    // Autosave every 5 cards checked (Save + continue).
+    if (++checksSinceSave.current >= 5) {
+      checksSinceSave.current = 0;
+      autosave();
+    }
+  };
+
+  /** Picks up the scan saved on the phone, where it was left. */
+  const resumeDraft = async () => {
+    if (!db) return;
+    releasePhotos(); // before loading: the draft's photos come back as new object URLs
+    const saved = await loadDraft();
+    if (!saved) {
+      setDraft(null);
+      return;
+    }
+    const { meta } = saved;
+    db.setCategories(meta.options.categories);
+    recognizer.current?.updateAllowed();
+    sessionCfg.current = { ...DEFAULT_SESSION, seeThrough: !meta.options.blankFillers };
+    scanMeta.current = meta;
+    scanning.current = false;
+    const spreads = saved.spreads.map((s) => ({ ...s, pockets: s.pockets.map((p) => ({ ...p, key: ++pocketKeys })) }));
+    commitSpreads(spreads);
+    setPagesPerSpread(meta.pagesPerSpread);
+    setRunStats(meta.runStats);
+    setDraft(null);
+    for (const s of spreads) for (const p of s.pockets) if (needsOcr(p) && !p.cardBack) runOcr((p as KeyedPocket).key, p.nameCrop!);
+    setScreen({ name: 'review', binder: meta.binder, fresh: true });
   };
 
   /** Removes a binder and its cards from the collection on this phone. */
@@ -190,12 +261,20 @@ export function App() {
       page: e.spreadIndex * pagesPerSpread + e.page + 1,
       slot: e.slot + 1,
     }));
+    // Adding to a binder saved earlier (e.g. the rest of it, scanned as another run): after its pages.
+    const before = scanMeta.current?.addToExisting ? collection.binders.find((b) => b.name === binder) : undefined;
+    if (before) {
+      const offset = Math.max(0, ...before.cards.map((c) => c.page));
+      const have = new Set(before.cards.map((c) => `${c.id}:${c.finish}`));
+      cards.splice(0, cards.length, ...before.cards, ...cards.filter((c) => !have.has(`${c.id}:${c.finish}`)).map((c) => ({ ...c, page: c.page + offset })));
+    }
     const next: Collection = {
       binders: [{ name: binder, updatedAt: new Date().toISOString(), cards }, ...collection.binders.filter((b) => b.name !== binder)],
     };
     await saveCollection(next);
     setCollection(next);
     setHistory(await recordPrices(db, next, live));
+    endScan();
     releasePhotos();
     commitSpreads([]);
     setScreen({ name: 'binder', binder });
@@ -232,6 +311,11 @@ export function App() {
           onScan={() => setScreen({ name: 'setup' })}
           onOpenBinder={(b) => setScreen({ name: 'binder', binder: b })}
           onDeleteBinder={deleteBinder}
+          draft={draft}
+          onResume={resumeDraft}
+          onDiscardDraft={() => {
+            if (draft && confirm(`Discard the unfinished scan of “${draft.binder}”? The ${draft.checked} cards checked so far will be lost.`)) endScan();
+          }}
           onBrowse={(query) => setScreen({ name: 'all', query })}
           onRefresh={refresh}
         />
@@ -251,6 +335,10 @@ export function App() {
           onBack={() => setScreen({ name: 'home' })}
           hasCategories={!!db?.hasCategories}
           onStart={(binder, source, options) => {
+            if (draft && !confirm(`Starting a new scan discards the unfinished scan of “${draft.binder}” (${draft.checked} of ${draft.cards} cards checked). Start anyway?`)) return;
+            endScan();
+            scanMeta.current = { binder, pagesPerSpread: 2, runStats: { captures: 0, repeats: 0, reread: 0 }, options: { categories: options.categories, blankFillers: options.blankFillers }, addToExisting: options.addToExisting };
+            checksSinceSave.current = 0;
             if (db) {
               db.setCategories(options.categories);
               recognizer.current?.updateAllowed();
@@ -274,6 +362,7 @@ export function App() {
           onSpread={onSpread}
           onDone={() => {
             flushOcr();
+            autosave();
             setScreen({ name: 'review', binder: screen.binder, fresh: true });
           }}
           onCancel={() => {
@@ -299,8 +388,9 @@ export function App() {
           onSave={() => saveBinder(screen.binder)}
           onDiscard={() => {
             if (!spreads.length || confirm('Discard this scan?')) {
+              endScan();
               releasePhotos();
-            commitSpreads([]);
+              commitSpreads([]);
               setScreen({ name: 'home' });
             }
           }}

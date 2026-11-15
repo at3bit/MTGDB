@@ -57,7 +57,9 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
   const [check, setCheck] = useState<{ keys: PocketKey[]; i: number; single: boolean } | null>(() => {
     if (!checkOnOpen) return null;
     const keys = checkList(spreads);
-    return keys.length ? { keys, i: 0, single: false } : null;
+    // A resumed scan picks up at the first card not checked yet.
+    const first = keys.findIndex((k) => !findPocket(spreads, k)?.approved);
+    return keys.length ? { keys, i: first < 0 ? keys.length : first, single: false } : null;
   });
   const openOne = (k: PocketKey) => setCheck({ keys: [k], i: 0, single: true });
   const startCheck = () => {
@@ -136,7 +138,7 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
                     const info = p.chosen !== null && !p.cardBack ? db.info(p.chosen) : null;
                     return (
                       <button key={p.slot} className={`tile ${pocketClass(p)}`} onClick={() => openOne({ spread: s.id, page: p.page, slot: p.slot })}>
-                        <img src={p.thumbUrl} alt={info?.name ?? 'pocket'} />
+                        <img src={p.thumbUrl} alt={info?.name ?? 'pocket'} loading="lazy" decoding="async" />
                         <div className="name">{tileName(db, p)}</div>
                         {!p.ghost && p.printingCheck && <div className="price" style={{ color: 'var(--warn)' }}>Which printing?</div>}
                         {!p.ghost && p.seeThrough && <div className="price" style={{ color: 'var(--warn)' }}>Through a sleeve?</div>}
@@ -202,7 +204,8 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
       {spreads.length === 0 ? (
         <div className="notice">No spreads were captured. Make sure the outline matches the pages and that each spread is held still for about half a second.</div>
       ) : (
-        <CardsView db={db} items={items} storageKey="review" orderGallery={pageGrids} />
+        // While checking card by card, the pages aren't drawn underneath (hundreds of photos in a big binder).
+        check && !check.single ? null : <CardsView db={db} items={items} storageKey="review" orderGallery={pageGrids} />
       )}
       {check && checking && checkingPocket && (
         <CardCheck

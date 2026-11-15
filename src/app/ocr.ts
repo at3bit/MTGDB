@@ -4,6 +4,14 @@ import { createWorker, PSM, type Worker as TesseractWorker } from 'tesseract.js'
 import type { WireImage } from './protocol.ts';
 
 let workerPromise: Promise<TesseractWorker> | null = null;
+/** Names read by the current worker, and reads in progress. */
+let used = 0;
+let busy = 0;
+/**
+ * Tesseract's memory (a WebAssembly heap) only ever grows, and a big binder means a thousand or more reads:
+ * start a fresh worker every so often so the phone doesn't run out of memory part-way through.
+ */
+const RECYCLE_AFTER = 120;
 
 function vendor(path: string) {
   return new URL(`vendor/tesseract/${path}`, new URL(import.meta.env.BASE_URL, location.href)).href;
@@ -48,11 +56,43 @@ function prepare(img: WireImage, invert: boolean): HTMLCanvasElement {
   return c;
 }
 
-export async function readCardName(img: WireImage): Promise<{ text: string; confidence: number }> {
+/** Pixels of a name crop that arrived as a JPEG. */
+async function pixels(img: WireImage | Blob): Promise<WireImage> {
+  if (!(img instanceof Blob)) return img;
+  const bmp = await createImageBitmap(img);
+  const c = document.createElement('canvas');
+  c.width = bmp.width;
+  c.height = bmp.height;
+  const ctx = c.getContext('2d', { willReadFrequently: true })!;
+  ctx.drawImage(bmp, 0, 0);
+  bmp.close();
+  const data = ctx.getImageData(0, 0, c.width, c.height);
+  c.width = c.height = 0;
+  return { width: data.width, height: data.height, buffer: data.data.buffer as ArrayBuffer };
+}
+
+export async function readCardName(crop: WireImage | Blob): Promise<{ text: string; confidence: number }> {
+  busy++;
+  try {
+    return await readName(crop);
+  } finally {
+    busy--;
+    if (used >= RECYCLE_AFTER && busy === 0 && workerPromise) {
+      const old = workerPromise;
+      workerPromise = null;
+      used = 0;
+      void old.then((w) => w.terminate()).catch(() => {});
+    }
+  }
+}
+
+async function readName(crop: WireImage | Blob): Promise<{ text: string; confidence: number }> {
+  const img = await pixels(crop);
   const w = await getWorker();
   // Free each canvas as soon as it's read: iOS counts canvases against a memory limit until they're collected.
   const read = async (invert: boolean) => {
     const c = prepare(img, invert);
+    used++;
     try {
       return (await w.recognize(c)).data;
     } finally {

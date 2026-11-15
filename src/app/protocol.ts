@@ -32,6 +32,8 @@ export interface WirePocket {
   thumb?: WireImage;
   thumbJpeg?: Blob;
   nameCrop?: WireImage;
+  /** The title-line crop as a JPEG (when the worker could encode one; then nameCrop is left out). */
+  nameJpeg?: Blob;
   query?: number[];
   borderLuma?: number;
   cardBack?: boolean;

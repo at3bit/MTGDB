@@ -4,6 +4,7 @@ import { cardPrice, type LivePrices } from '../app/session.ts';
 import { trendFor, type Collection, type PriceHistory } from '../app/store.ts';
 import { scryfallImage } from '../app/prices.ts';
 import type { Baselines } from '../core/baselines.ts';
+import type { DraftSummary } from '../app/draft.ts';
 
 interface Props {
   db: CardDB | null;
@@ -16,6 +17,10 @@ interface Props {
   onScan: () => void;
   onOpenBinder: (name: string) => void;
   onDeleteBinder: (name: string) => void;
+  /** An unfinished scan saved on the phone (e.g. after a crash), to resume or discard. */
+  draft: DraftSummary | null;
+  onResume: () => void;
+  onDiscardDraft: () => void;
   /** Open the all-cards view, optionally searching for a name. */
   onBrowse: (query?: string) => void;
   onRefresh: () => void;
@@ -69,7 +74,7 @@ export function TrendBadge({ t }: { t: OwnedRow['trend'] }) {
   return <span className={`badge ${up ? 'up' : 'down'}`}>{up ? '▲' : '▼'} {Math.round(Math.abs(t.vsAvg) * 100)}%</span>;
 }
 
-export function HomeScreen({ db, dbStatus, collection, live, history, baselines, refreshing, onScan, onOpenBinder, onDeleteBinder, onBrowse, onRefresh }: Props) {
+export function HomeScreen({ db, dbStatus, collection, live, history, baselines, refreshing, onScan, onOpenBinder, onDeleteBinder, draft, onResume, onDiscardDraft, onBrowse, onRefresh }: Props) {
   const [query, setQuery] = useState('');
   const allRows = db ? ownedRows(db, collection, live, history, baselines) : [];
   const rows = uniqueRows(allRows);
@@ -94,6 +99,18 @@ export function HomeScreen({ db, dbStatus, collection, live, history, baselines,
         </div>
       )}
       {dbStatus.error && !dbStatus.missing && <div className="notice error">{dbStatus.error}</div>}
+      {draft && (
+        <div className="notice" data-testid="resume">
+          <strong>Unfinished scan of “{draft.binder}”</strong>
+          <div className="small" style={{ marginTop: 4 }}>
+            {draft.cards} cards, {draft.checked} checked · saved {new Date(draft.savedAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+          </div>
+          <div className="row" style={{ marginTop: 10, gap: 8 }}>
+            <button className="btn primary" disabled={!db} onClick={onResume}>Resume</button>
+            <button className="btn" onClick={onDiscardDraft}>Discard</button>
+          </div>
+        </div>
+      )}
       {dbStatus.loading && <div className="notice">{dbStatus.loading}</div>}
 
       <div className="card">

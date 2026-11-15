@@ -9,6 +9,8 @@ export interface ScanOptions {
   categories: number;
   /** Empty sleeves hold a blank card, so nothing can be seen through them. */
   blankFillers: boolean;
+  /** The binder's name is already saved: add these cards to it (true) or replace them (false). */
+  addToExisting: boolean;
 }
 
 const CHIPS: { cat: Category; label: string }[] = [
@@ -54,7 +56,7 @@ export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, o
   const [name, setName] = useState(collection.binders[0]?.name ?? 'Binder 1');
   const fileInput = useRef<HTMLInputElement>(null);
   const photoInput = useRef<HTMLInputElement>(null);
-  const exists = collection.binders.some((b) => b.name === name.trim());
+
   // What each binder holds is remembered by its name ("Black binder" stays Black).
   const [byBinder, setByBinder] = useState<Record<string, number>>(() => readJSON(CATS_KEY, {}));
   const categories = byBinder[name.trim()] ?? 0;
@@ -64,7 +66,9 @@ export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, o
     writeJSON(CATS_KEY, next);
   };
   const [blankFillers, setBlankFillers] = useState(() => readJSON(FILLERS_KEY, false));
-  const start = (source: ScanSource) => onStart(name.trim(), source, { categories, blankFillers });
+  const [replace, setReplace] = useState(false);
+  const saved = collection.binders.find((b) => b.name === name.trim());
+  const start = (source: ScanSource) => onStart(name.trim(), source, { categories, blankFillers, addToExisting: !!saved && !replace });
 
   return (
     <div>
@@ -82,7 +86,12 @@ export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, o
             ))}
           </datalist>
         </label>
-        {exists && <div className="muted small">Saving will replace the cards stored for “{name.trim()}”.</div>}
+        {saved && (
+          <div className="seg" role="group" aria-label="When saving">
+            <button className={!replace ? 'on' : ''} onClick={() => setReplace(false)}>Add to its {saved.cards.length} cards</button>
+            <button className={replace ? 'on' : ''} onClick={() => setReplace(true)}>Replace them</button>
+          </div>
+        )}
         {hasCategories && (
           <div>
             <div className="small" style={{ marginBottom: 6 }}>
