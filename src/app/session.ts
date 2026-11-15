@@ -1,6 +1,6 @@
 // The results of one binder run, as shown in the review screen.
 import type { Match } from '../core/fingerprint.ts';
-import { resolvePrinting, rankPrintings as rankPrintingsCore, type RankedPrinting } from '../core/printing.ts';
+import { originSet, pageSetChoice, resolvePrinting, rankPrintings as rankPrintingsCore, type RankedPrinting } from '../core/printing.ts';
 import { DEFAULT_RECOGNIZE, type PocketStatus } from '../core/recognize.ts';
 import type { CardDB, Finish } from '../core/carddb.ts';
 import type { WireImage, WirePocket } from './protocol.ts';
@@ -55,6 +55,8 @@ export interface PocketView {
   readName?: number;
   /** Checked by the user in the card-by-card approval step. */
   approved?: boolean;
+  /** The printing was picked from look-alikes because most cards on its page are from this set. */
+  pageSet?: string;
   /** What the app had chosen before the card check changed it (for the scan report, see report.ts). */
   firstGuess?: { card: number | null; status: PocketStatus; via: PocketView['via'] };
   /**
@@ -142,6 +144,35 @@ export function settlePrinting(p: PocketView, db: CardDB): PocketView {
   const choice = resolvePrinting(db, db.nameOf[p.chosen], p.query, p.borderLuma);
   // The name stays as sure as it was; an ambiguous printing is flagged separately (printingCheck).
   return { ...p, chosen: choice.card, finish: finishFor(db, choice.card, p.finish), printingCheck: choice.ambiguous, ties: choice.ambiguous ? choice.ties.map((t) => t.card) : undefined };
+}
+
+/**
+ * Binders are usually sorted by set: among printings that look the same, each card the app identified
+ * takes the one from the set most other cards on its page are from (a Legions page keeps Legions cards
+ * rather than their List reprints). Cards the user picked count towards a page's set and aren't changed.
+ */
+export function preferPageSets(spread: Spread, db: CardDB): Spread {
+  const counted = (p: PocketView) => p.chosen !== null && p.status === 'matched' && !p.ghost && !p.cardBack;
+  const sets = new Map<number, Map<string, number>>();
+  for (const p of spread.pockets) {
+    if (!counted(p)) continue;
+    const m = sets.get(p.page) ?? new Map<string, number>();
+    const set = originSet(db.info(p.chosen!));
+    m.set(set, (m.get(set) ?? 0) + 1);
+    sets.set(p.page, m);
+  }
+  let changed = false;
+  const pockets = spread.pockets.map((p) => {
+    if (!counted(p) || p.via === 'manual') return p;
+    const others = new Map(sets.get(p.page));
+    const own = originSet(db.info(p.chosen!));
+    others.set(own, (others.get(own) ?? 1) - 1);
+    const pick = pageSetChoice(db, p.chosen!, others, p.query);
+    if (pick === null || pick === p.chosen) return p;
+    changed = true;
+    return { ...p, chosen: pick, finish: finishFor(db, pick, p.finish), pageSet: db.info(pick).set };
+  });
+  return changed ? { ...spread, pockets } : spread;
 }
 
 /** One capture of a spread, as it arrives from the recognizer. */
@@ -303,6 +334,7 @@ export function addReading(spreads: Spread[], reading: Reading, pagesPerSpread: 
     last && isRepeat(last, reading, pagesPerSpread, db, cfg)
       ? [...spreads.slice(0, -1), { ...last, pockets: mergeInto(last.pockets, reading.pockets) }]
       : [...spreads, { id: (last?.id ?? 0) + 1, time: reading.time, pockets: reading.pockets }];
+  next[next.length - 1] = preferPageSets(next[next.length - 1], db);
   return markGhosts(next, pagesPerSpread, db, cfg);
 }
 

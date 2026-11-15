@@ -5,7 +5,7 @@ import { clearDraft, draftSummary, loadDraft, saveDraft, type DraftMeta, type Dr
 import type { CardDB } from '../core/carddb.ts';
 import { loadBaselines, loadCardDB, MissingDataError, Recognizer } from '../app/data.ts';
 import type { Baselines } from '../core/baselines.ts';
-import { addReading, applyOcr, binderEntries, DEFAULT_SESSION, markGhosts, needsOcr, releasePhotos, toPocketView, type SessionConfig, type LivePrices, type PocketView, type Spread } from '../app/session.ts';
+import { addReading, applyOcr, binderEntries, preferPageSets, DEFAULT_SESSION, markGhosts, needsOcr, releasePhotos, toPocketView, type SessionConfig, type LivePrices, type PocketView, type Spread } from '../app/session.ts';
 import { loadCollection, loadHistory, loadLivePrices, recordPrices, saveCollection, saveLivePrices, type Collection, type OwnedCard, type PriceHistory } from '../app/store.ts';
 import { fetchLivePrices } from '../app/prices.ts';
 import type { WirePocket } from '../app/protocol.ts';
@@ -161,10 +161,11 @@ export function App() {
           const { readCardName } = await import('../app/ocr.ts');
           const { text } = await readCardName(crop);
           commitSpreads(
-            spreadsRef.current.map((s) => ({
-              ...s,
-              pockets: s.pockets.map((p) => ((p as KeyedPocket).key === key && p.via !== 'manual' ? { ...applyOcr(p, text, db), key } : p)),
-            })),
+            spreadsRef.current.map((s) =>
+              s.pockets.some((p) => (p as KeyedPocket).key === key)
+                ? preferPageSets({ ...s, pockets: s.pockets.map((p) => ((p as KeyedPocket).key === key && p.via !== 'manual' ? { ...applyOcr(p, text, db), key } : p)) }, db)
+                : s,
+            ),
           );
         } catch (e) {
           console.warn('OCR failed', e);
@@ -195,7 +196,7 @@ export function App() {
       // A photo read again after Pause & adjust replaces its earlier (misaligned) reading.
       const redo = r.photo !== undefined ? prev.findIndex((s) => s.photo === r.photo) : -1;
       if (redo >= 0) {
-        const replaced = prev.map((s, i) => (i === redo ? { ...s, pockets } : s));
+        const replaced = prev.map((s, i) => (i === redo ? preferPageSets({ ...s, pockets }, db) : s));
         commitSpreads(markGhosts(replaced, pps, db, sessionCfg.current));
         for (const p of pockets) if (needsOcr(p) && !p.cardBack) runOcr(p.key, p.nameCrop!);
         autosave(1500);
@@ -213,7 +214,8 @@ export function App() {
   );
 
   const updatePocket = (spreadId: number, pocket: PocketView) => {
-    const next = spreadsRef.current.map((s) => (s.id === spreadId ? { ...s, pockets: s.pockets.map((p) => (p.page === pocket.page && p.slot === pocket.slot ? pocket : p)) } : s));
+    // A card the user picked also tells the other cards on its page which set they're likely from.
+    const next = spreadsRef.current.map((s) => (s.id === spreadId && db ? preferPageSets({ ...s, pockets: s.pockets.map((p) => (p.page === pocket.page && p.slot === pocket.slot ? pocket : p)) }, db) : s));
     commitSpreads(db ? markGhosts(next, pagesPerSpread, db, sessionCfg.current) : next);
     // Autosave every 5 cards checked (Save + continue).
     if (++checksSinceSave.current >= 5) {

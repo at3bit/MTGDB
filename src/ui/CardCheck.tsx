@@ -120,7 +120,9 @@ export function CardCheck({ db, live, pocket, location, position, onSave, onBack
             ? 'Several printings look alike but are priced differently: compare the set symbol and border, and swipe to the right one.'
             : pocket.seeThrough
               ? 'Hazier than the other cards on its page, as if behind an empty sleeve. If the sleeve is empty, mark it empty.'
-              : null;
+              : pocket.pageSet && pocket.via !== 'manual' && current
+                ? `${current.setName} printing, like the other cards on this page (identical-looking printings exist). Swipe if yours is another.`
+                : null;
   const row = (label: string, a: string, b: string) => (
     <tr className={a !== b ? 'differs' : ''}>
       <th>{label}</th>

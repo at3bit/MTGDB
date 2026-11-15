@@ -86,6 +86,27 @@ link. Each person's collection is stored only on their own phone.
    are one entry. (Deciding by the symbol automatically was tested and
    did no better than the default pick: the symbol is only ~20 px at 4K and
    many look-alikes have identical symbol areas. See `src/core/symbol.ts`.)
+
+   Two rules come from a real 205-card scan (a binder sorted by set), where
+   9 of the 34 cards that have a look-alike in *The List* were saved as the
+   List reprint and one as a foil-only ★ printing:
+   - **Exact twins lose ties.** A List reprint is the original card with a
+     tiny planeswalker mark, and a ★ printing is the foil-only copy of a
+     regular one; a photo can't tell them apart (their fingerprints differ by
+     2-6 bits), so photo noise used to decide. They now give way to the
+     regular printing unless the photo is clearly closer to them (5 bits).
+     Look-alikes far apart in price are still flagged **Which printing?**,
+     whatever the preference.
+   - **The page's set.** Among printings that look the same (fingerprints
+     within 8 bits), a card takes the one from the set most other cards on
+     its page come from (at least 2 of them, and 40%), so a Legions page reads
+     Legions, not Time Spiral Timeshifted or List copies. Cards you picked in
+     the check count towards the page's set and are never changed; the check
+     says when a printing was chosen this way.
+   Replaying that scan's checked list through the new rules changes exactly
+   those 10 cards and none of the other 195; on the random-printing
+   evaluation (`npm run eval`) exact printings went from 75.0% / 67.6% /
+   70.4% to 75.9% / 68.5% / 70.4%, card names unchanged.
 7. **Empty sleeves** (`src/app/session.ts`). An empty sleeve shows whatever
    is behind it. If the sleeve's other side holds a card, you see a card
    back, which is recognised and treated as empty. If both sides are empty,
