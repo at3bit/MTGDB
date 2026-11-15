@@ -38,6 +38,16 @@ link. Each person's collection is stored only on their own phone.
    cards, and carries it through the run. On real photos taken with the binder
    upside down, all 36 pockets were wrong without this; with it, all 23 cards
    were named right and all 13 blank fillers read as empty.
+   Before the outline is fitted to the cards, a page can read poorly either
+   way up, so when no turn is clearly better unfitted, the app also fits the
+   outline both ways up (each way separately: the fit follows the cards' name
+   bar and type line) and turns the page if upside down then reads clearly
+   better. On 15 more real pages, each read on its own (110 cards, 25 blank
+   fillers), the turn was missed on 5 pages before (66 cards named right, 5
+   confidently wrong) and on 1 after (90 named right, none confidently
+   wrong; the missed page has 4 cards, 3 of them glossy foils). In a run the
+   turn carries over from the previous page anyway. It costs time only on
+   pages that read badly (57 s -> 69 s for the 15 pages in Node).
    The outline itself: One outline
    with four corners, around the page, or around both pages of an open binder
    with a handle for the gap at the spine. It stays where you put it: each

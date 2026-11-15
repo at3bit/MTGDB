@@ -112,6 +112,27 @@ export function recognizeTrackedSpread(
       pages[p] = turnQuad(outline.pages[p], best.turn);
       base = { ...base, pages: base.pages.map((b, i) => (i === p ? pages[p] : b)) };
       pockets = [...pockets.filter((x) => x.page !== p), ...best.pockets].sort((a, b) => a.page - b.page || a.slot - b.slot);
+      continue;
+    }
+    // Before the outline is fitted to the cards, the page can read poorly either way up: on real photos of an
+    // upside-down page, the right way read 3 of 9 cards unfitted (the wrong way 2) but 8 of 9 once fitted. So
+    // fit it both ways (the fit follows the cards' name bar and type line, so each way needs its own) and turn
+    // the page only if upside down then reads clearly better.
+    const readAt = (quad: Quad) => {
+      const res = recognizeSpread(frames, { ...base, pages: [quad] }, idx, cfg).map((r) => ({ ...r, page: p }));
+      return { pockets: res, q: quality(res), quad };
+    };
+    const fitted = (quad: Quad) => [NARROW_ALIGN, DEFAULT_ALIGN].map((a) => alignCalibration(ref, { ...base, pages: [quad] }, a).calibration.pages[0]);
+    const most = <T extends { q: PageQuality }>(xs: T[]) => xs.reduce((a, b) => (b.q.matched > a.q.matched ? b : a));
+    const here = most([{ pockets: mine, q, quad: pages[p] }, ...fitted(pages[p]).map(readAt)]);
+    if (here.q.matched >= q.nonEmpty * 0.6) continue; // fitted the way it is, the page reads well
+    const flip = turnQuad(outline.pages[p], (turns[p] + 2) % 4);
+    const flipped = most(fitted(flip).map(readAt));
+    if (flipped.q.matched >= here.q.matched + opts.minGain) {
+      turns[p] = (turns[p] + 2) % 4;
+      pages[p] = flipped.quad;
+      base = { ...base, pages: base.pages.map((b, i) => (i === p ? flip : b)) };
+      pockets = [...pockets.filter((x) => x.page !== p), ...flipped.pockets].sort((a, b) => a.page - b.page || a.slot - b.slot);
     }
   }
   let narrowFromBase: Calibration | undefined;
