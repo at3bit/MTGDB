@@ -5,11 +5,11 @@ import type { ScanSource } from './ScanScreen.tsx';
 
 /** Choices made before a scan. */
 export interface ScanOptions {
-  /** CATEGORY bits of what the binder holds (0 = anything). */
+  /** CATEGORY bits of what the collection holds (0 = anything). */
   categories: number;
   /** Empty sleeves hold a blank card, so nothing can be seen through them. */
   blankFillers: boolean;
-  /** The binder's name is already saved: add these cards to it (true) or replace them (false). */
+  /** Add these cards to a collection saved earlier (rather than start a new one). */
   addToExisting: boolean;
 }
 
@@ -53,7 +53,15 @@ interface Props {
 }
 
 export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, onBack, hasCategories }: Props) {
-  const [name, setName] = useState(collection.binders[0]?.name ?? 'Binder 1');
+  const existing = collection.binders;
+  // Add to a collection saved earlier (the most recently scanned first), or create a new one.
+  const [creating, setCreating] = useState(existing.length === 0);
+  const [picked, setPicked] = useState(existing[0]?.name ?? '');
+  const [newName, setNewName] = useState('');
+  const pickedSaved = existing.find((b) => b.name === picked);
+  const name = creating || !pickedSaved ? newName : picked;
+  const taken = creating ? existing.find((b) => b.name.toLowerCase() === newName.trim().toLowerCase()) : undefined;
+  const ready = !!name.trim() && !taken;
   const fileInput = useRef<HTMLInputElement>(null);
   const photoInput = useRef<HTMLInputElement>(null);
 
@@ -66,38 +74,55 @@ export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, o
     writeJSON(CATS_KEY, next);
   };
   const [blankFillers, setBlankFillers] = useState(() => readJSON(FILLERS_KEY, false));
-  const [replace, setReplace] = useState(false);
-  const saved = collection.binders.find((b) => b.name === name.trim());
-  const start = (source: ScanSource) => onStart(name.trim(), source, { categories, blankFillers, addToExisting: !!saved && !replace });
+  const start = (source: ScanSource) => onStart(name.trim(), source, { categories, blankFillers, addToExisting: !creating && !!pickedSaved });
 
   return (
     <div>
       <div className="topbar">
         <button className="back" onClick={onBack}>‹ Back</button>
-        <h1>Scan a binder</h1>
+        <h1>Scan cards</h1>
       </div>
       <div className="card stack">
-        <label className="field">
-          <span>Binder name</span>
-          <input type="text" list="binders" value={name} onChange={(e) => setName(e.target.value)} />
-          <datalist id="binders">
-            {collection.binders.map((b) => (
-              <option key={b.name} value={b.name} />
-            ))}
-          </datalist>
-        </label>
-        {saved && (
-          <div className="seg" role="group" aria-label="When saving">
-            <button className={!replace ? 'on' : ''} onClick={() => setReplace(false)}>Add to its {saved.cards.length} cards</button>
-            <button className={replace ? 'on' : ''} onClick={() => setReplace(true)}>Replace them</button>
-          </div>
+        {!creating ? (
+          <>
+            <label className="field">
+              <span>Add to collection</span>
+              <select className="select block-select" value={picked} onChange={(e) => setPicked(e.target.value)} aria-label="Add to collection">
+                {existing.map((b) => (
+                  <option key={b.name} value={b.name}>
+                    {b.name} ({b.cards.length} card{b.cards.length === 1 ? '' : 's'})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="muted small" style={{ margin: '-4px 0 0' }}>
+              New pages go after its {pickedSaved?.cards.length ?? 0} cards; printings it already has aren’t added twice.
+            </p>
+            <button className="btn block" onClick={() => setCreating(true)}>+ Create new collection</button>
+          </>
+        ) : (
+          <>
+            <label className="field">
+              <span>New collection name</span>
+              <input type="text" value={newName} placeholder="e.g. Black UC/R" autoFocus={existing.length > 0} onChange={(e) => setNewName(e.target.value)} />
+            </label>
+            {taken && (
+              <div className="notice small" style={{ margin: 0 }}>
+                You already have a collection called “{taken.name}”.{' '}
+                <button className="linkish" onClick={() => { setPicked(taken.name); setCreating(false); setNewName(''); }}>Add to it instead</button>
+              </div>
+            )}
+            {existing.length > 0 && !taken && (
+              <button className="btn block" onClick={() => { setCreating(false); setNewName(''); }}>‹ Add to an existing collection instead</button>
+            )}
+          </>
         )}
         {hasCategories && (
           <div>
             <div className="small" style={{ marginBottom: 6 }}>
-              What’s in this binder? <span className="muted">(the app looks at these cards first)</span>
+              What’s in this collection? <span className="muted">(the app looks at these cards first)</span>
             </div>
-            <div className="chips" role="group" aria-label="Binder colours and types">
+            <div className="chips" role="group" aria-label="Collection colours and types">
               <button className={`chip ${categories === 0 ? 'on' : ''}`} onClick={() => setCategories(0)}>Anything</button>
               {CHIPS.map(({ cat, label }) => (
                 <button
@@ -120,16 +145,16 @@ export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, o
           <input type="checkbox" checked={englishOnly} onChange={(e) => onEnglishOnly(e.target.checked)} />
           <span>My cards are in English <span className="muted">(ignore foreign-language printings, which often share art with English ones)</span></span>
         </label>
-        <button className="btn primary block" disabled={!name.trim()} onClick={() => photoInput.current?.click()}>
+        <button className="btn primary block" disabled={!ready} onClick={() => photoInput.current?.click()}>
           Upload photos (one per page)
         </button>
         <p className="muted small" style={{ margin: '-4px 0 0' }}>
           Most accurate: take a photo of each page (or open binder) with the Camera app, then pick them all here, in page order.
         </p>
-        <button className="btn block" disabled={!name.trim()} onClick={() => start('camera')}>
+        <button className="btn block" disabled={!ready} onClick={() => start('camera')}>
           Use live camera
         </button>
-        <button className="btn block" disabled={!name.trim()} onClick={() => fileInput.current?.click()}>
+        <button className="btn block" disabled={!ready} onClick={() => fileInput.current?.click()}>
           Upload a video of the run
         </button>
         <input

@@ -26,9 +26,9 @@ await page.addInitScript(() => {
   new PerformanceObserver((l) => l.getEntries().forEach((e) => (window as any).__long.push(e.duration))).observe({ type: 'longtask', buffered: true });
 });
 await page.goto('http://localhost:4180/');
-await page.getByRole('button', { name: 'Scan a binder' }).waitFor({ timeout: 120000 });
-await page.getByRole('button', { name: 'Scan a binder' }).click();
-await page.locator('input[type=text]').fill('Timing');
+await page.getByRole('button', { name: 'Scan cards' }).waitFor({ timeout: 120000 });
+await page.getByRole('button', { name: 'Scan cards' }).click();
+await page.getByLabel('New collection name').fill('Timing');
 await page.setInputFiles('[data-testid=photo-input]', photos);
 const read = page.getByRole('button', { name: /^Read \d+ photos?$/ });
 await read.waitFor({ timeout: 60000 });

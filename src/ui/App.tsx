@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { diagnostics } from '../app/diagnostics.ts';
+import { buildReport, deleteReport, saveReport } from '../app/report.ts';
 import { clearDraft, draftSummary, loadDraft, saveDraft, type DraftMeta, type DraftSummary } from '../app/draft.ts';
 import type { CardDB } from '../core/carddb.ts';
 import { loadBaselines, loadCardDB, MissingDataError, Recognizer } from '../app/data.ts';
@@ -249,6 +250,7 @@ export function App() {
   const deleteBinder = async (binder: string) => {
     const next: Collection = { binders: collection.binders.filter((b) => b.name !== binder) };
     await saveCollection(next);
+    await deleteReport(binder).catch(() => {});
     setCollection(next);
   };
 
@@ -263,8 +265,16 @@ export function App() {
     }));
     // Adding to a binder saved earlier (e.g. the rest of it, scanned as another run): after its pages.
     const before = scanMeta.current?.addToExisting ? collection.binders.find((b) => b.name === binder) : undefined;
+    const offset = before ? Math.max(0, ...before.cards.map((c) => c.page)) : 0;
+    // What the app read next to what was saved, with the card photos, to share for improving recognition.
+    try {
+      const options = { categories: scanMeta.current?.options.categories ?? 0, blankFillers: !!scanMeta.current?.options.blankFillers, englishOnly };
+      const { scan, photos } = buildReport(db, spreadsRef.current, pagesPerSpread, offset, options);
+      await saveReport(binder, scan, photos, !before);
+    } catch (e) {
+      console.warn('Scan report not saved', e);
+    }
     if (before) {
-      const offset = Math.max(0, ...before.cards.map((c) => c.page));
       const have = new Set(before.cards.map((c) => `${c.id}:${c.finish}`));
       cards.splice(0, cards.length, ...before.cards, ...cards.filter((c) => !have.has(`${c.id}:${c.finish}`)).map((c) => ({ ...c, page: c.page + offset })));
     }

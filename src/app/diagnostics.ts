@@ -127,10 +127,14 @@ export const diagnostics = new Diagnostics();
 
 /** Shares the diagnostics zip (share sheet on a phone; a download elsewhere). */
 export async function shareDiagnostics(): Promise<void> {
-  const file = await diagnostics.export();
+  return shareFile(await diagnostics.export(), 'MTGDB scan diagnostics');
+}
+
+/** Shares a file (the share sheet on a phone, e.g. to save it to Files or Google Drive; a download elsewhere). */
+export async function shareFile(file: File, title: string): Promise<void> {
   if (navigator.canShare?.({ files: [file] })) {
     try {
-      await navigator.share({ files: [file], title: 'MTGDB scan diagnostics' });
+      await navigator.share({ files: [file], title });
       return;
     } catch (e) {
       if ((e as Error).name === 'AbortError') return;

@@ -89,11 +89,11 @@ try {
     });
   }, SCENE_PAGES);
   await page.reload();
-  await page.waitForFunction(() => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent === 'Scan a binder'); return b && !(b as HTMLButtonElement).disabled; }, null, { timeout: 120000 });
+  await page.waitForFunction(() => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent === 'Scan cards'); return b && !(b as HTMLButtonElement).disabled; }, null, { timeout: 120000 });
   console.log(`card database loaded from ${url} in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
   console.log(`  ${await page.locator('p.muted.small').last().textContent()}`);
-  await page.getByRole('button', { name: 'Scan a binder' }).click();
-  await page.locator('input[type=text]').fill('Smoke test');
+  await page.getByRole('button', { name: 'Scan cards' }).click();
+  await page.getByLabel('New collection name').fill('Smoke test');
   await page.setInputFiles('[data-testid=video-input]', videoPath);
   await page.getByRole('button', { name: 'Process video' }).click({ timeout: 30000 });
   await page.getByText('Review “Smoke test”').waitFor({ timeout: 180000 });

@@ -28,7 +28,7 @@ export interface CardItem {
 export type SortKey = 'order' | 'price' | 'gain' | 'gainPct' | 'drop' | 'name' | 'set';
 
 const SORTS: { key: SortKey; label: string }[] = [
-  { key: 'order', label: 'Binder order' },
+  { key: 'order', label: 'Page order' },
   { key: 'price', label: 'Highest price' },
   { key: 'gain', label: 'Biggest gain, 30 days ($)' },
   { key: 'gainPct', label: 'Biggest gain, 30 days (%)' },

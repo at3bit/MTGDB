@@ -55,6 +55,8 @@ export interface PocketView {
   readName?: number;
   /** Checked by the user in the card-by-card approval step. */
   approved?: boolean;
+  /** What the app had chosen before the card check changed it (for the scan report, see report.ts). */
+  firstGuess?: { card: number | null; status: PocketStatus; via: PocketView['via'] };
   /**
    * The card was seen through an empty sleeve: it's really on a neighbouring
    * sheet, where it's recorded. Not counted or saved here. Recomputed after
@@ -484,10 +486,12 @@ export function cardOptions(db: CardDB, p: PocketView, nameIdx?: number): number
 
 /** The user checked this pocket: it holds `card` (in `finish`). Their word is final. */
 export function approvePocket(p: PocketView, card: number, finish: Finish): PocketView {
-  return { ...p, chosen: card, finish, status: 'matched', via: 'manual', approved: true, printingCheck: false, seeThrough: false, ghost: false, cardBack: false };
+  return { ...p, firstGuess: firstGuessOf(p), chosen: card, finish, status: 'matched', via: 'manual', approved: true, printingCheck: false, seeThrough: false, ghost: false, cardBack: false };
 }
+
+const firstGuessOf = (p: PocketView): PocketView['firstGuess'] => p.firstGuess ?? { card: p.status === 'empty' || p.ghost || p.cardBack ? null : p.chosen, status: p.status, via: p.via };
 
 /** The user says this sleeve is empty. */
 export function approveEmpty(p: PocketView): PocketView {
-  return { ...p, chosen: null, status: 'empty', via: 'manual', approved: true, printingCheck: false, seeThrough: false };
+  return { ...p, firstGuess: firstGuessOf(p), chosen: null, status: 'empty', via: 'manual', approved: true, printingCheck: false, seeThrough: false };
 }

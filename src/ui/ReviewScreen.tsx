@@ -230,7 +230,7 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
             <div className="big-number">{formatUSD(total)}</div>
             <p className="muted">{entries.length} card{entries.length === 1 ? '' : 's'} will be saved to “{binder}”.</p>
             <div className="stack">
-              <button className="btn primary block" onClick={onSave}>Save binder</button>
+              <button className="btn primary block" onClick={onSave}>Save collection</button>
               <button className="btn block" onClick={() => setCheck({ ...check, i: check.keys.length - 1 })}>‹ Back to the last card</button>
               <button className="btn block" onClick={() => setCheck(null)}>See the pages</button>
             </div>
@@ -254,7 +254,7 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
             </>
           ) : (
             <button className="btn primary" onClick={onSave} disabled={!spreads.length}>
-              Save binder
+              Save collection
             </button>
           )}
         </div>

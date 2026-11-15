@@ -139,6 +139,8 @@ label.field > span { display: block; font-size: 13px; color: var(--muted); margi
 
 /* Cards view */
 .select { appearance: none; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; min-height: 40px; font-weight: 600; font-size: 14px; color: var(--text); }
+.select.block-select { width: 100%; min-height: 44px; font-size: 16px; padding: 11px 36px 11px 12px; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%; background-size: 5px 5px; background-repeat: no-repeat; }
+.linkish { border: 0; background: none; padding: 0; color: var(--accent); font-weight: 600; text-decoration: underline; cursor: pointer; }
 .card-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
 @media (min-width: 640px) { .card-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
 .tile .badge { margin-top: 2px; font-size: 11px; padding: 1px 6px; }

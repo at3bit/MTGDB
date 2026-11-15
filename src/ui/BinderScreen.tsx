@@ -1,4 +1,7 @@
+import { useEffect, useState } from 'react';
 import { formatUSD, type CardDB } from '../core/carddb.ts';
+import { shareFile } from '../app/diagnostics.ts';
+import { exportReport, reportSummary, type ReportSummary } from '../app/report.ts';
 import type { LivePrices } from '../app/session.ts';
 import type { Collection, PriceHistory } from '../app/store.ts';
 import { scryfallPage } from '../app/prices.ts';
@@ -8,7 +11,7 @@ import { CardsView, type CardItem } from './CardsView.tsx';
 
 function toCSV(rows: OwnedRow[], db: CardDB): string {
   const esc = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
-  const lines = ['Name,Set,Set code,Collector number,Finish,Price USD,30-day change USD,Binder,Page,Slot,Scryfall ID'];
+  const lines = ['Name,Set,Set code,Collector number,Finish,Price USD,30-day change USD,Collection,Page,Slot,Scryfall ID'];
   for (const r of rows) {
     const info = db.info(r.card);
     lines.push(
@@ -19,12 +22,7 @@ function toCSV(rows: OwnedRow[], db: CardDB): string {
 }
 
 function exportCSV(rows: OwnedRow[], db: CardDB, name: string) {
-  const blob = new Blob([toCSV(rows, db)], { type: 'text/csv' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `${name.replace(/[^\w-]+/g, '_')}.csv`;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  void shareFile(new File([toCSV(rows, db)], `${name.replace(/[^\w-]+/g, '_')}.csv`, { type: 'text/csv' }), name);
 }
 
 function itemsFor(rows: OwnedRow[], db: CardDB, withBinder: boolean, binderOrder: string[]): CardItem[] {
@@ -57,6 +55,26 @@ interface BinderProps {
 export function BinderScreen({ db, name, collection, live, history, baselines, onBack, onDelete }: BinderProps) {
   const rows = ownedRows(db, collection, live, history, baselines, name);
   const total = rows.reduce((t, r) => t + (r.price ?? 0), 0);
+  const [report, setReport] = useState<ReportSummary | null>(null);
+  const [sharing, setSharing] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void reportSummary(name).then((r) => live && setReport(r));
+    return () => {
+      live = false;
+    };
+  }, [name, collection]);
+  const shareReport = async () => {
+    setSharing(true);
+    try {
+      const file = await exportReport(name);
+      if (file) await shareFile(file, `MTGDB scan report: ${name}`);
+    } catch (e) {
+      alert(`Could not make the scan report: ${(e as Error).message}`);
+    } finally {
+      setSharing(false);
+    }
+  };
   return (
     <div>
       <div className="topbar">
@@ -74,9 +92,19 @@ export function BinderScreen({ db, name, collection, live, history, baselines, o
               if (confirm(`Delete “${name}” and its ${rows.length} cards from this phone? This can’t be undone.`)) onDelete();
             }}
           >
-            Delete binder
+            Delete collection
           </button>
         </div>
+        {report && (
+          <div className="row spread" style={{ marginTop: 10 }}>
+            <span className="muted small grow">
+              Scan report: {report.cards} cards, {report.changed} fixed by you{report.scans > 1 ? ` · ${report.scans} scans` : ''}
+            </span>
+            <button className="btn small" onClick={shareReport} disabled={sharing}>
+              {sharing ? 'Preparing…' : 'Share scan report'}
+            </button>
+          </div>
+        )}
       </div>
       <CardsView db={db} items={itemsFor(rows, db, false, [name])} storageKey="binder" defaultSort="price" />
     </div>
@@ -104,7 +132,7 @@ export function CollectionScreen({ db, collection, live, history, baselines, que
         <h1>All cards</h1>
         <button className="btn small" onClick={() => exportCSV(rows, db, 'collection')}>Export CSV</button>
       </div>
-      <CardsView db={db} items={itemsFor(rows, db, true, order)} storageKey="all" defaultSort="price" initialQuery={query} autoFocusSearch={!query} emptyText="No cards saved yet. Scan a binder first." />
+      <CardsView db={db} items={itemsFor(rows, db, true, order)} storageKey="all" defaultSort="price" initialQuery={query} autoFocusSearch={!query} emptyText="No cards saved yet. Scan some cards first." />
     </div>
   );
 }

@@ -96,10 +96,14 @@ link. Each person's collection is stored only on their own phone.
    cards can make the right page look unchanged after a turn while the left
    page always changes.
 8. **Before a scan** (setup screen):
-   - **What's in this binder?** White, Blue, Black, Red, Green, Multicolor,
-     Artifact, Land, Colorless (any mix; remembered per binder name). Every
+   - **Collection**: pick one of your collections from the list to add the
+     scan to it (the most recently scanned is selected), or tap **Create new
+     collection** and name it. (The app calls a saved set of cards a
+     *collection*; *binder* means the physical one.)
+   - **What's in this collection?** White, Blue, Black, Red, Green, Multicolor,
+     Artifact, Land, Colorless (any mix; remembered per collection). Every
      printing's colours and type come from Scryfall. The matcher still looks at
-     every card, but one in the binder's colours wins unless another matches
+     every card, but one in the collection's colours wins unless another matches
      clearly better (by more than 6 points), and confidence is judged against
      other cards of those colours. A card outside them is flagged to check.
    - **Empty sleeves hold a blank card**: nothing can show through, so the
@@ -159,29 +163,39 @@ link. Each person's collection is stored only on their own phone.
 - If the video stops responding part-way (Safari now and then drops a seek;
   each is retried) or the card reader crashes (it restarts), the scan says so
   and keeps everything captured up to then, rather than freezing.
-- Quantities aren't tracked: a binder stores one entry per printing (and
-  finish), and the collection totals count each printing once.
-- **Delete a binder** from the home screen's binder list (Delete, then
-  confirm) or with Delete binder at the top of the binder's page.
+- Quantities aren't tracked: a collection stores one entry per printing (and
+  finish), and the totals count each printing once.
+- **Delete a collection** from the home screen's list (Delete, then confirm)
+  or with Delete collection at the top of its page.
 - **Autosave**: a scan in progress is saved on the phone (IndexedDB) as each
   photo is read, after every 5 Save + continue taps, when the scan finishes
   and whenever the app goes to the background. If the app crashes or iOS
   closes it, the home screen offers **Resume** (the photos, readings and
   cards checked so far come back, and the card check carries on from the
-  first unchecked card) or Discard. Saving the binder or discarding the scan
+  first unchecked card) or Discard. Saving the collection or discarding the scan
   forgets the autosave. Each card's photo is written once; later saves only
   rewrite the small list of readings.
-- **Add to a binder** saved earlier: scan under the same name and choose
-  **Add to its N cards** (the default) to append the new pages after its
-  existing ones (printings it already has aren't added twice), or
-  **Replace them**. A big binder can be scanned in several sittings this way.
+- **Adding to a collection**: a scan added to an existing collection goes
+  after its pages (printings it already has aren't added twice), so a big
+  binder can be scanned in several sittings. To start a collection over,
+  delete it and create it again.
+- **Scan report** (on each collection's page, **Share scan report**): for
+  every card scanned into the collection, what the app read (its 5 closest
+  matches and how close, the name it read, its flags) next to what was saved
+  after the card check, whether you changed it, and the card's photo, as a zip
+  (report.json + cards/*.jpg, about 20-30 KB a card). Every card fixed in the
+  check is a real mistake to learn from; it's kept on the phone until shared,
+  and deleted with the collection.
+- **Export CSV** (collection page, or All cards) opens the share sheet (Save
+  to Files, Google Drive, …): name, set, collector number, finish, price,
+  collection, page, slot and Scryfall ID of each card.
 - Memory, for big binders (a crash at about 450 of 900 cards on an iPhone):
   the name strip of each card is kept as a small JPEG (not raw pixels) and
   dropped once read; each card keeps its 12 closest matches (not all of
   them); the name reader (Tesseract) is restarted every 120 reads, because its
   memory only grows; the pages aren't drawn under the card check, and their
   photos load as they're scrolled to.
-- **Do I own…?** on the home screen searches every binder; **Browse all**
+- **Do I own…?** on the home screen searches every collection; **Browse all**
   lists the whole collection with the same views, sorts and search.
 
 ## Prices and sell signals

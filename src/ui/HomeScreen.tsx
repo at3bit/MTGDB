@@ -117,11 +117,11 @@ export function HomeScreen({ db, dbStatus, collection, live, history, baselines,
         <h2>Collection value</h2>
         <div className="big-number">{formatUSD(total)}</div>
         <div className="muted small">
-          {rows.length} card{rows.length === 1 ? '' : 's'} in {collection.binders.length} binder{collection.binders.length === 1 ? '' : 's'}
+          {rows.length} card{rows.length === 1 ? '' : 's'} in {collection.binders.length} collection{collection.binders.length === 1 ? '' : 's'}
           {db && ` · prices from ${db.file.built.slice(0, 10)}`}
         </div>
         <div className="row" style={{ marginTop: 12 }}>
-          <button className="btn primary grow" onClick={onScan} disabled={!db}>Scan a binder</button>
+          <button className="btn primary grow" onClick={onScan} disabled={!db}>Scan cards</button>
           <button className="btn" onClick={onRefresh} disabled={!db || !rows.length || !!refreshing}>{refreshing ?? 'Refresh prices'}</button>
         </div>
       </div>
@@ -170,7 +170,7 @@ export function HomeScreen({ db, dbStatus, collection, live, history, baselines,
 
       {collection.binders.length > 0 && (
         <div className="card">
-          <h2>Binders</h2>
+          <h2>Collections</h2>
           <ul className="list">
             {collection.binders.map((b) => (
               <li key={b.name} className="tap" onClick={() => onOpenBinder(b.name)}>

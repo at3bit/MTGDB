@@ -175,10 +175,11 @@ try {
     });
   }, SCENE_PAGES);
   await page.reload();
-  await page.getByRole('button', { name: 'Scan a binder' }).waitFor({ timeout: 20000 });
+  await page.getByRole('button', { name: 'Scan cards' }).waitFor({ timeout: 20000 });
   await page.screenshot({ path: join(out, '1-home.png') });
-  await page.getByRole('button', { name: 'Scan a binder' }).click();
-  await page.locator('input[type=text]').fill('Trade Binder');
+  await page.getByRole('button', { name: 'Scan cards' }).click();
+  // No collections yet: straight to naming a new one.
+  await page.getByLabel('New collection name').fill('Trade Binder');
   await page.screenshot({ path: join(out, '2-setup.png') });
   await page.setInputFiles('[data-testid=video-input]', videoPath);
   await page.getByRole('button', { name: 'Process video' }).waitFor({ timeout: 20000 });
@@ -250,7 +251,7 @@ try {
   await page.getByRole('button', { name: '‹ Pages' }).click();
   const ticks = await page.locator('.tile .name', { hasText: '✓' }).count();
   check(ticks === 2 && (await page.getByRole('button', { name: /^Check cards \(2\// }).count()) === 1, `checked cards marked on the pages (${ticks}) and counted`);
-  await page.getByRole('button', { name: /^(Save now|Save binder)$/ }).click();
+  await page.getByRole('button', { name: /^(Save now|Save collection)$/ }).click();
   await page.getByRole('button', { name: 'Export CSV' }).waitFor({ timeout: 10000 });
   await page.screenshot({ path: join(out, '7-binder-gallery.png'), fullPage: true });
   const identified = tiles.filter((t) => !['Empty', 'Not identified', 'Check', '—'].includes(t.name) && !t.name.endsWith('?')).length;
@@ -278,9 +279,27 @@ try {
   await page.getByRole('button', { name: '‹ Home' }).click();
   await page.screenshot({ path: join(out, '8-home-after.png'), fullPage: true });
 
+  // With a collection saved, the setup screen offers it in a list, and Create new collection for a new one.
+  const newCollection = async (name: string) => {
+    await page.getByRole('button', { name: 'Scan cards' }).click();
+    await page.getByRole('button', { name: '+ Create new collection' }).click();
+    await page.getByLabel('New collection name').fill(name);
+  };
+  await page.getByRole('button', { name: 'Scan cards' }).click();
+  const offered = await page.getByLabel('Add to collection').inputValue();
+  await page.screenshot({ path: join(out, '2-setup-existing.png') });
+  await page.getByRole('button', { name: '+ Create new collection' }).click();
+  await page.getByLabel('New collection name').fill('trade binder');
+  const sameName = await page.getByText('You already have a collection called “Trade Binder”.').count();
+  const blocked = await page.getByRole('button', { name: 'Upload photos (one per page)' }).isDisabled();
+  await page.screenshot({ path: join(out, '2-setup-taken.png') });
+  await page.getByRole('button', { name: 'Add to it instead' }).click();
+  const backTo = await page.getByLabel('Add to collection').inputValue();
+  check(offered === 'Trade Binder' && sameName === 1 && blocked && backTo === 'Trade Binder', `setup offers the saved collection (${offered}); a new one can't reuse its name (blocked: ${blocked}) and "Add to it instead" picks it`);
+  await page.getByRole('button', { name: '‹ Back' }).click();
+
   // Quick flips: the middle spread never settles, so it must come from the stillest moment of its pause.
-  await page.getByRole('button', { name: 'Scan a binder' }).click();
-  await page.locator('input[type=text]').fill('Quick Flips');
+  await newCollection('Quick Flips');
   await page.setInputFiles('[data-testid=video-input]', fastPath);
   await page.getByRole('button', { name: 'Process video' }).waitFor({ timeout: 20000 });
   await page.waitForTimeout(500);
@@ -296,8 +315,7 @@ try {
   await page.getByRole('button', { name: /Home|Discard|Cancel/ }).first().click().catch(() => {});
 
   const uploadRun = async (name: string, path: string) => {
-    await page.getByRole('button', { name: 'Scan a binder' }).click();
-    await page.locator('input[type=text]').fill(name);
+    await newCollection(name);
     await page.setInputFiles('[data-testid=video-input]', path);
     await page.getByRole('button', { name: 'Process video' }).waitFor({ timeout: 20000 });
     await page.waitForTimeout(500);
@@ -358,7 +376,7 @@ try {
   check(seeksPaused <= 1 && paused.spreads === 3 && paused.right >= 52, `pause & adjust mid-upload: video held while paused (${seeksPaused} seeks), then ${paused.spreads} spreads, ${paused.right}/${paused.total} pockets right`);
   check(ticked === 5, `resumed scan keeps the 5 checked cards (${ticked} ticked)`);
   await page.getByRole('button', { name: /Discard/ }).click();
-  await page.getByRole('button', { name: 'Scan a binder' }).waitFor();
+  await page.getByRole('button', { name: 'Scan cards' }).waitFor();
   check((await page.getByTestId('resume').count()) === 0, 'discarding the scan forgets the autosave');
 
   // Safari sometimes drops a seek: the run asks again and carries on.
@@ -384,8 +402,7 @@ try {
 
   // Photos (two of each spread): the outline set at the start is used for the whole batch, with no stops,
   // until Pause & adjust, which stops on one photo; Continue carries on to the end.
-  await page.getByRole('button', { name: 'Scan a binder' }).click();
-  await page.locator('input[type=text]').fill('Photo Binder');
+  await newCollection('Photo Binder');
   await page.setInputFiles('[data-testid=photo-input]', photoPaths.flatMap((p) => [p, p]));
   await page.getByRole('button', { name: 'Read 6 photos' }).waitFor({ timeout: 20000 });
   await page.screenshot({ path: join(out, '13-photos-lineup.png') });
@@ -407,26 +424,48 @@ try {
   );
   await page.getByRole('button', { name: /Discard/ }).click();
 
-  // Scanning more of a binder saved earlier adds to it (the default) instead of replacing it.
+  // Scanning more cards into a saved collection adds them after its pages.
   const extraIds = Array.from({ length: 18 }, (_, i) => 250 + i);
   const extraPath = join(out, 'photo-4.jpg');
   {
     const img = renderSpread(extraIds.map((id) => cards[id]), { width: W, height: H, seed: 103, noiseSeed: 600, noise: 2.5, blur: true, jitter: 0.012 }).frame;
     await sharp(Buffer.from(img.data.buffer, img.data.byteOffset, img.data.byteLength), { raw: { width: img.width, height: img.height, channels: 4 } }).jpeg({ quality: 92 }).toFile(extraPath);
   }
-  await page.getByRole('button', { name: 'Scan a binder' }).click();
-  await page.locator('input[type=text]').fill('Trade Binder');
-  const addBtn = page.getByRole('button', { name: /^Add to its \d+ cards$/ });
-  const had = Number((await addBtn.textContent())?.match(/\d+/)?.[0]);
-  const addByDefault = (await addBtn.getAttribute('class')) === 'on';
+  await page.getByRole('button', { name: 'Scan cards' }).click();
+  const picker = page.getByLabel('Add to collection');
+  await picker.selectOption('Trade Binder');
+  const had = Number((await picker.locator('option:checked').textContent())?.match(/\((\d+) card/)?.[1]);
   await page.setInputFiles('[data-testid=photo-input]', extraPath);
   await page.getByRole('button', { name: 'Read 1 photo' }).click({ timeout: 20000 });
   await page.getByText('Review “Trade Binder”').waitFor({ timeout: 120000 });
+  // Fix one card in the check (pick its next option), so the scan report has a change in it.
+  await page.getByRole('heading', { name: /^Card 1 of \d+$/ }).waitFor({ timeout: 10000 });
+  await page.getByRole('button', { name: 'Next option' }).click();
+  await page.getByRole('button', { name: 'Save + continue' }).click();
   await reviewed();
-  await page.getByRole('button', { name: /^(Save now|Save binder)$/ }).click();
+  await page.getByRole('button', { name: /^(Save now|Save collection)$/ }).click();
   await page.getByRole('button', { name: 'Export CSV' }).waitFor({ timeout: 10000 });
   const nowHas = Number((await page.getByTestId('cards-summary').textContent())?.match(/^(\d+) card/)?.[1]);
-  check(addByDefault && nowHas >= had + 16 && nowHas <= had + 18, `adding a scan to a saved binder: ${had} cards + 18 new -> ${nowHas}`);
+  check(had === 53 && nowHas >= had + 16 && nowHas <= had + 18, `adding a scan to a saved collection: ${had} cards + 18 new -> ${nowHas}`);
+  // The scan report: both scans of the collection, what the app read against what was saved, with photos.
+  const reportRow = page.getByText(/^Scan report:/);
+  await reportRow.waitFor({ timeout: 10000 });
+  const reportLabel = (await reportRow.textContent()) ?? '';
+  const [reportDl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Share scan report' }).click()]);
+  const reportZip = unzipSync(readFileSync(await reportDl.path()));
+  const report = JSON.parse(strFromU8(reportZip['report.json']));
+  const rcards = report.scans.flatMap((sc: { cards: unknown[] }) => sc.cards) as { photo?: string; changed: boolean; app: { card: { name: string } | null }; saved: { name: string } | null; top: unknown[]; page: number }[];
+  const fixed = rcards.filter((c) => c.changed);
+  const withPhotos = rcards.filter((c) => c.photo && reportZip[c.photo]).length;
+  const secondScanPages = report.scans[1]?.cards.map((c: { page: number }) => c.page) ?? [];
+  check(
+    report.scans.length === 2 && rcards.length === 72 && fixed.length === 1 && fixed[0].app.card?.name !== fixed[0].saved?.name && withPhotos === 72 && Math.min(...secondScanPages) === 7 && /1 fixed by you · 2 scans/.test(reportLabel),
+    `scan report: "${reportLabel}"; ${report.scans.length} scans, ${rcards.length} pockets, ${withPhotos} photos, fixed: ${fixed.map((c) => `${c.app.card?.name} -> ${c.saved?.name}`).join(', ')}; added pages start at ${Math.min(...secondScanPages)}`,
+  );
+  // CSV export (the share sheet on a phone; a download here).
+  const [csvDl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export CSV' }).click()]);
+  const csv = readFileSync(await csvDl.path(), 'utf8').split('\n');
+  check(csv[0].includes(',Collection,Page,Slot,') && csv.length === nowHas + 1, `CSV export: ${csv.length - 1} rows, header "${csv[0].slice(0, 60)}…"`);
   await page.getByRole('button', { name: '‹ Home' }).click();
 
   // Delete a saved binder straight from the home screen's list (the confirm dialog is accepted).
@@ -437,9 +476,9 @@ try {
     const db = await new Promise<IDBDatabase>((resolve) => { const r = indexedDB.open('keyval-store'); r.onsuccess = () => resolve(r.result); });
     const keys = await new Promise<IDBValidKey[]>((resolve) => { const r = db.transaction('keyval').objectStore('keyval').getAllKeys(); r.onsuccess = () => resolve(r.result); });
     const col = await Promise.all(keys.map((k) => new Promise<unknown>((resolve) => { const r = db.transaction('keyval').objectStore('keyval').get(k); r.onsuccess = () => resolve(r.result); })));
-    return JSON.stringify(col).includes('Trade Binder');
+    return JSON.stringify(col).includes('Trade Binder') || keys.some((k) => String(k).startsWith('report'));
   });
-  check(binderRows === 0 && !stored, `binder deleted from the home screen (${binderRows} left; still stored: ${stored})`);
+  check(binderRows === 0 && !stored, `collection deleted from the home screen, with its scan report (${binderRows} left; anything still stored: ${stored})`);
 } catch (e) {
   failed = true;
   console.error(e);
@@ -468,7 +507,7 @@ await new Promise<void>((resolve, reject) => {
   });
   try {
     await p2.goto('http://localhost:4173/?db=test-data');
-    await p2.getByRole('button', { name: 'Scan a binder' }).click({ timeout: 20000 });
+    await p2.getByRole('button', { name: 'Scan cards' }).click({ timeout: 20000 });
     const t0 = Date.now();
     await p2.setInputFiles('[data-testid=video-input]', portraitPath);
     await p2.getByRole('button', { name: 'Process video' }).waitFor({ timeout: 15000 });
@@ -515,8 +554,8 @@ try {
     });
   }, SCENE_PAGES);
   await cam.reload();
-  await cam.getByRole('button', { name: 'Scan a binder' }).click({ timeout: 20000 });
-  await cam.locator('input[type=text]').fill('Camera binder');
+  await cam.getByRole('button', { name: 'Scan cards' }).click({ timeout: 20000 });
+  await cam.getByLabel('New collection name').fill('Camera binder');
   await cam.getByRole('button', { name: 'Use live camera' }).click();
   const t0 = Date.now();
   await cam.getByRole('button', { name: 'When I tap Snap' }).click({ timeout: 20000 });
