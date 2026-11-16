@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { CATEGORY, type Category } from '../core/carddb.ts';
 import type { Collection } from '../app/store.ts';
 import type { ScanSource } from './ScanScreen.tsx';
+import { SwitchRow } from './kit.tsx';
 
 /** Choices made before a scan. */
 export interface ScanOptions {
@@ -50,12 +51,14 @@ interface Props {
   /** Whether the card data knows colours and types. */
   hasCategories: boolean;
   onBack: () => void;
+  /** Opened from the "New collection" tile: start on the name field. */
+  startCreating?: boolean;
 }
 
-export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, onBack, hasCategories }: Props) {
+export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, onBack, hasCategories, startCreating }: Props) {
   const existing = collection.binders;
   // Add to a collection saved earlier (the most recently scanned first), or create a new one.
-  const [creating, setCreating] = useState(existing.length === 0);
+  const [creating, setCreating] = useState(existing.length === 0 || !!startCreating);
   const [picked, setPicked] = useState(existing[0]?.name ?? '');
   const [newName, setNewName] = useState('');
   const pickedSaved = existing.find((b) => b.name === picked);
@@ -77,11 +80,12 @@ export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, o
   const start = (source: ScanSource) => onStart(name.trim(), source, { categories, blankFillers, addToExisting: !creating && !!pickedSaved });
 
   return (
-    <div>
+    <main>
       <div className="topbar">
         <button className="back" onClick={onBack}>‹ Back</button>
         <h1>Scan cards</h1>
       </div>
+      <p className="muted" style={{ margin: '-4px 0 16px' }}>Add binder pages to a collection. Photos of 3 × 3 pages work best.</p>
       <div className="card stack">
         {!creating ? (
           <>
@@ -119,8 +123,8 @@ export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, o
         )}
         {hasCategories && (
           <div>
-            <div className="small" style={{ marginBottom: 6 }}>
-              What’s in this collection? <span className="muted">(the app looks at these cards first)</span>
+            <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--muted)', marginBottom: 8 }}>
+              Colours in this collection <span style={{ fontWeight: 400 }}>· checked first</span>
             </div>
             <div className="chips" role="group" aria-label="Collection colours and types">
               <button className={`chip ${categories === 0 ? 'on' : ''}`} onClick={() => setCategories(0)}>Anything</button>
@@ -137,19 +141,20 @@ export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, o
             </div>
           </div>
         )}
-        <label className="row small" style={{ gap: 8 }}>
-          <input type="checkbox" checked={blankFillers} onChange={(e) => { setBlankFillers(e.target.checked); writeJSON(FILLERS_KEY, e.target.checked); }} />
-          <span>Empty sleeves hold a blank card <span className="muted">(nothing shows through them, so the app doesn’t look for see-through cards)</span></span>
-        </label>
-        <label className="row small" style={{ gap: 8 }}>
-          <input type="checkbox" checked={englishOnly} onChange={(e) => onEnglishOnly(e.target.checked)} />
-          <span>My cards are in English <span className="muted">(ignore foreign-language printings, which often share art with English ones)</span></span>
-        </label>
-        <button className="btn primary block" disabled={!ready} onClick={() => photoInput.current?.click()}>
+        <div>
+          <SwitchRow
+            checked={blankFillers}
+            onChange={(on) => { setBlankFillers(on); writeJSON(FILLERS_KEY, on); }}
+            title="Blank sleeves are fillers"
+            description="Empty pockets hold a blank card, so nothing shows through them."
+          />
+          <SwitchRow checked={englishOnly} onChange={onEnglishOnly} title="English cards only" description="Ignore foreign printings, which often share art with English ones." />
+        </div>
+        <button className="btn primary block large" disabled={!ready} onClick={() => photoInput.current?.click()}>
           Upload photos (one per page)
         </button>
         <p className="muted small" style={{ margin: '-4px 0 0' }}>
-          Most accurate: take a photo of each page (or open binder) with the Camera app, then pick them all here, in page order.
+          Most accurate: photograph each page with the Camera app, then pick the photos here in page order.
         </p>
         <button className="btn block" disabled={!ready} onClick={() => start('camera')}>
           Use live camera
@@ -203,6 +208,6 @@ export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, o
           This app can’t lock the live camera’s focus, so photos or a video from the Camera app read more cards correctly.
         </p>
       </div>
-    </div>
+    </main>
   );
 }

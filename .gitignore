@@ -7,3 +7,6 @@ public/data/
 test-results/
 *.log
 .DS_Store
+
+# Personal Claude Code settings
+.claude/settings.local.json

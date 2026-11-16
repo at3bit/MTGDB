@@ -1,10 +1,11 @@
-import { useState } from 'react';
 import { formatUSD, type CardDB } from '../core/carddb.ts';
 import { cardPrice, type LivePrices } from '../app/session.ts';
 import { trendFor, type Collection, type PriceHistory } from '../app/store.ts';
-import { scryfallImage } from '../app/prices.ts';
+import { scryfallArt } from '../app/prices.ts';
 import type { Baselines } from '../core/baselines.ts';
 import type { DraftSummary } from '../app/draft.ts';
+import { collectionMana, Icon, LIGHT_TILES, PriceBadge } from './kit.tsx';
+import { CardRow } from './CardsView.tsx';
 
 interface Props {
   db: CardDB | null;
@@ -14,15 +15,15 @@ interface Props {
   history: PriceHistory;
   baselines: Baselines | null;
   refreshing: string | null;
-  onScan: () => void;
   onOpenBinder: (name: string) => void;
-  onDeleteBinder: (name: string) => void;
+  onNewCollection: () => void;
+  onOpenCard: (row: OwnedRow) => void;
+  /** Every card, most valuable first (the Search tab). */
+  onSeeAll: () => void;
   /** An unfinished scan saved on the phone (e.g. after a crash), to resume or discard. */
   draft: DraftSummary | null;
   onResume: () => void;
   onDiscardDraft: () => void;
-  /** Open the all-cards view, optionally searching for a name. */
-  onBrowse: (query?: string) => void;
   onRefresh: () => void;
 }
 
@@ -68,30 +69,35 @@ export function uniqueRows(rows: OwnedRow[]): OwnedRow[] {
   });
 }
 
-export function TrendBadge({ t }: { t: OwnedRow['trend'] }) {
-  if (!t || Math.abs(t.vsAvg) < 0.05) return null;
-  const up = t.vsAvg > 0;
-  return <span className={`badge ${up ? 'up' : 'down'}`}>{up ? '▲' : '▼'} {Math.round(Math.abs(t.vsAvg) * 100)}%</span>;
+/** Total change over 30 days of the cards whose change is known: dollars and fraction. */
+export function change30(rows: OwnedRow[]): { gain: number; pct: number } | null {
+  let gain = 0, base = 0, n = 0;
+  for (const r of rows) {
+    if (r.price == null || r.trend?.gain30 == null) continue;
+    gain += r.trend.gain30;
+    base += r.price - r.trend.gain30;
+    n++;
+  }
+  return n && base > 0 ? { gain, pct: gain / base } : null;
 }
 
-export function HomeScreen({ db, dbStatus, collection, live, history, baselines, refreshing, onScan, onOpenBinder, onDeleteBinder, draft, onResume, onDiscardDraft, onBrowse, onRefresh }: Props) {
-  const [query, setQuery] = useState('');
+const plural = (n: number, w: string) => `${n.toLocaleString()} ${w}${n === 1 ? '' : 's'}`;
+
+export function HomeScreen({ db, dbStatus, collection, live, history, baselines, refreshing, onOpenBinder, onNewCollection, onOpenCard, onSeeAll, draft, onResume, onDiscardDraft, onRefresh }: Props) {
   const allRows = db ? ownedRows(db, collection, live, history, baselines) : [];
   const rows = uniqueRows(allRows);
   const total = rows.reduce((t, r) => t + (r.price ?? 0), 0);
+  const change = change30(rows);
   const sell = rows
     .filter((r) => r.trend && r.trend.vsAvg >= SELL_SIGNAL && r.trend.avg * r.trend.vsAvg >= 1)
     .sort((a, b) => b.trend!.avg * b.trend!.vsAvg - a.trend!.avg * a.trend!.vsAvg)
-    .slice(0, 10);
-  const top = [...rows].sort((a, b) => (b.price ?? 0) - (a.price ?? 0)).slice(0, 10);
-  const binderValue = (name: string) => allRows.filter((r) => r.binder === name).reduce((t, r) => t + (r.price ?? 0), 0);
+    .slice(0, 5);
+  const top = [...rows].sort((a, b) => (b.price ?? 0) - (a.price ?? 0)).slice(0, 5);
+  const lastRefresh = Object.values(live).reduce((t, p) => (p.at > t ? p.at : t), '');
+  const pricesAsOf = lastRefresh ? new Date(lastRefresh) : db ? new Date(db.file.built) : null;
 
   return (
-    <div>
-      <div className="topbar">
-        <h1>MTGDB</h1>
-      </div>
-
+    <main>
       {dbStatus.missing && (
         <div className="notice">
           <strong>Card database not built yet.</strong>
@@ -102,8 +108,8 @@ export function HomeScreen({ db, dbStatus, collection, live, history, baselines,
       {draft && (
         <div className="notice" data-testid="resume">
           <strong>Unfinished scan of “{draft.binder}”</strong>
-          <div className="small" style={{ marginTop: 4 }}>
-            {draft.cards} cards, {draft.checked} checked · saved {new Date(draft.savedAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+          <div className="small muted" style={{ marginTop: 4 }}>
+            {plural(draft.cards, 'card')}, {draft.checked} checked · saved {new Date(draft.savedAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
           </div>
           <div className="row" style={{ marginTop: 10, gap: 8 }}>
             <button className="btn primary" disabled={!db} onClick={onResume}>Resume</button>
@@ -113,127 +119,99 @@ export function HomeScreen({ db, dbStatus, collection, live, history, baselines,
       )}
       {dbStatus.loading && <div className="notice">{dbStatus.loading}</div>}
 
-      <div className="card">
-        <h2>Collection value</h2>
-        <div className="big-number">{formatUSD(total)}</div>
-        <div className="muted small">
-          {rows.length} card{rows.length === 1 ? '' : 's'} in {collection.binders.length} collection{collection.binders.length === 1 ? '' : 's'}
-          {db && ` · prices from ${db.file.built.slice(0, 10)}`}
+      <section className="portfolio" aria-labelledby="portfolio-title">
+        <h1 className="eyebrow" id="portfolio-title">Portfolio</h1>
+        <div className="money-hero" data-testid="portfolio-total">{formatUSD(total)}</div>
+        <div className="trend">
+          {change && Math.abs(change.gain) >= 0.05 && <PriceBadge change={change.gain} pct={change.pct} suffix="30 days" />}
+          <span className="small muted">
+            {plural(rows.length, 'card')}
+            {pricesAsOf && ` · prices ${pricesAsOf.toLocaleDateString([], { day: 'numeric', month: 'short' })}`}
+          </span>
+          {rows.length > 0 && (
+            <button className="btn quiet small" onClick={onRefresh} disabled={!db || !!refreshing} style={{ marginLeft: -8 }}>
+              <Icon name="refresh" size={18} />
+              {refreshing ?? 'Refresh prices'}
+            </button>
+          )}
         </div>
-        <div className="row" style={{ marginTop: 12 }}>
-          <button className="btn primary grow" onClick={onScan} disabled={!db}>Scan cards</button>
-          <button className="btn" onClick={onRefresh} disabled={!db || !rows.length || !!refreshing}>{refreshing ?? 'Refresh prices'}</button>
-        </div>
-      </div>
+      </section>
 
-      {db && rows.length > 0 && (
-        <form
-          className="card stack"
-          onSubmit={(e) => {
-            e.preventDefault();
-            onBrowse(query.trim());
-          }}
-        >
-          <h2>Do I own…?</h2>
-          <div className="row">
-            <input type="search" className="grow" placeholder="Card name" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search your collection" />
-            <button className="btn" type="submit">Search</button>
-          </div>
-          <button className="btn block" type="button" onClick={() => onBrowse()}>Browse all {rows.length} cards</button>
-        </form>
-      )}
-
-      {sell.length > 0 && (
-        <div className="card">
-          <h2>Worth selling now</h2>
-          <p className="muted small" style={{ marginTop: 0 }}>
-            Trading at least {Math.round(SELL_SIGNAL * 100)}% (and $1) above their own 30-day average
-            {baselines ? ` on TCGplayer, as of ${baselines.asOf}` : ''}.
-          </p>
-          <ul className="list">
-            {sell.map((r) => (
-              <li key={`${r.binder}-${r.page}-${r.slot}`}>
-                <img className="mini" src={scryfallImage(r.id, 'small')} alt="" loading="lazy" />
-                <div className="grow">
-                  <div className="ellipsis">{r.name}</div>
-                  <div className="muted small">{r.binder} · page {r.page} · slot {r.slot} · avg {formatUSD(r.trend!.avg)}</div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div className="num">{formatUSD(r.price)}</div>
-                  <TrendBadge t={r.trend} />
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
+      {db && collection.binders.length === 0 && !draft && (
+        <section className="card stack">
+          <h2 className="title-m">Start your first collection</h2>
+          <ol className="tips checklist">
+            <li>Take a photo of each binder page, flat and filling the frame, with the Camera app.</li>
+            <li>Tap Scan, name the collection and pick the photos, in page order.</li>
+            <li>Check the cards the app isn’t sure about, then save. Prices update every day.</li>
+          </ol>
+          <button className="btn primary block" onClick={onNewCollection}>Scan your first collection</button>
+        </section>
       )}
 
       {collection.binders.length > 0 && (
-        <div className="card">
-          <h2>Collections</h2>
-          <ul className="list">
-            {collection.binders.map((b) => (
-              <li key={b.name} className="tap" onClick={() => onOpenBinder(b.name)}>
-                <div className="grow">
-                  <div className="ellipsis">{b.name}</div>
-                  <div className="muted small">{b.cards.length} cards · scanned {b.updatedAt.slice(0, 10)}</div>
-                </div>
-                <span className="num">{db ? formatUSD(binderValue(b.name)) : ''}</span>
-                <button
-                  className="btn small danger"
-                  aria-label={`Delete ${b.name}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (confirm(`Delete “${b.name}” and its ${b.cards.length} cards from this phone? This can’t be undone.`)) onDeleteBinder(b.name);
-                  }}
-                >
-                  Delete
+        <section aria-labelledby="collections-title">
+          <div className="section-head">
+            <h2 className="title-m" id="collections-title">Collections</h2>
+            <span className="small muted">{collection.binders.length}</span>
+          </div>
+          <div className="tiles">
+            {collection.binders.map((b) => {
+              const mine = db ? allRows.filter((r) => r.binder === b.name) : [];
+              const value = mine.reduce((t, r) => t + (r.price ?? 0), 0);
+              const best = mine.reduce<OwnedRow | null>((m, r) => ((r.price ?? 0) > (m?.price ?? -1) ? r : m), null);
+              const mana = db ? collectionMana(db, b) : 'C';
+              return (
+                <button key={b.name} className={`ctile mana-${mana}${LIGHT_TILES.includes(mana) ? ' light' : ''}`} onClick={() => onOpenBinder(b.name)} aria-label={`${b.name}: ${db ? formatUSD(value) : ''}, ${plural(b.cards.length, 'card')}`}>
+                  {best && <img className="art" src={scryfallArt(best.id)} alt="" loading="lazy" />}
+                  <span className="shade" />
+                  <span className="name">{b.name}</span>
+                  <span>
+                    <span className="value" style={{ display: 'block' }}>{db ? formatUSD(value) : ''}</span>
+                    <span className="count">{plural(b.cards.length, 'card')}</span>
+                  </span>
                 </button>
-                <span className="muted">›</span>
-              </li>
-            ))}
-          </ul>
-        </div>
+              );
+            })}
+            <button className="ctile new" onClick={onNewCollection}>
+              <Icon name="plus" />
+              New collection
+            </button>
+          </div>
+        </section>
+      )}
+
+      {sell.length > 0 && (
+        <section aria-labelledby="sell-title" style={{ marginBottom: 28 }}>
+          <div className="section-head">
+            <h2 className="title-m" id="sell-title">Worth selling now</h2>
+          </div>
+          <p className="small muted" style={{ margin: '-6px 0 4px' }}>
+            At least {Math.round(SELL_SIGNAL * 100)}% (and $1) above their 30-day average{baselines ? ` on TCGplayer, as of ${baselines.asOf}` : ''}.
+          </p>
+          {sell.map((r) => (
+            <CardRow key={`${r.binder}-${r.page}-${r.slot}`} id={r.id} name={r.name} finish={r.finish} meta={`${r.binder} · page ${r.page}, slot ${r.slot} · avg ${formatUSD(r.trend!.avg)}`} price={r.price} trend={r.trend} onOpen={() => onOpenCard(r)} />
+          ))}
+        </section>
       )}
 
       {top.length > 0 && (
-        <div className="card">
-          <h2>Most valuable</h2>
-          <ul className="list">
-            {top.map((r) => (
-              <li key={`${r.binder}-${r.page}-${r.slot}`}>
-                <img className="mini" src={scryfallImage(r.id, 'small')} alt="" loading="lazy" />
-                <div className="grow">
-                  <div className="ellipsis">{r.name}{r.finish !== 'nonfoil' ? ' ✦' : ''}</div>
-                  <div className="muted small">{r.binder} · page {r.page} · slot {r.slot}</div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div className="num">{formatUSD(r.price)}</div>
-                  <TrendBadge t={r.trend} />
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {db && collection.binders.length === 0 && (
-        <div className="card">
-          <h2>How it works</h2>
-          <ol className="tips">
-            <li>Mount your iPhone on a tripod, camera facing straight down at the table.</li>
-            <li>Open the binder underneath so both pages are in view.</li>
-            <li>Line up the outline once, then turn the pages, pausing about half a second on each spread (or tap Snap page).</li>
-            <li>Check anything marked orange or red, then save. Prices update daily.</li>
-          </ol>
-        </div>
+        <section aria-labelledby="top-title">
+          <div className="section-head">
+            <h2 className="title-m" id="top-title">Most valuable</h2>
+            <button className="btn quiet small" onClick={onSeeAll} style={{ marginRight: -16 }}>See all</button>
+          </div>
+          {top.map((r) => (
+            <CardRow key={`${r.binder}-${r.page}-${r.slot}`} id={r.id} name={r.name} finish={r.finish} meta={`${r.binder} · page ${r.page}, slot ${r.slot}`} price={r.price} trend={r.trend} onOpen={() => onOpenCard(r)} />
+          ))}
+        </section>
       )}
 
       {db && (
-        <p className="muted small" style={{ textAlign: 'center' }}>
+        <p className="muted small" style={{ textAlign: 'center', marginTop: 24 }}>
           {db.count.toLocaleString()} printings · card data and prices from Scryfall ({db.file.source.replace('Scryfall ', '')})
         </p>
       )}
-    </div>
+    </main>
   );
 }

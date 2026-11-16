@@ -14,15 +14,22 @@ import { HomeScreen } from './HomeScreen.tsx';
 import { SetupScreen } from './SetupScreen.tsx';
 import { ScanScreen, type ScanSource } from './ScanScreen.tsx';
 import { ReviewScreen } from './ReviewScreen.tsx';
-import { BinderScreen, CollectionScreen } from './BinderScreen.tsx';
+import { BinderScreen, SearchScreen } from './BinderScreen.tsx';
+import { CardDetail } from './CardDetail.tsx';
+import { ownedRows, type OwnedRow } from './HomeScreen.tsx';
+import { TabBar } from './kit.tsx';
+import type { Finish } from '../core/carddb.ts';
 
 type Screen =
   | { name: 'home' }
-  | { name: 'setup' }
+  | { name: 'setup'; create?: boolean }
   | { name: 'scan'; binder: string; source: ScanSource }
   | { name: 'review'; binder: string; fresh?: boolean }
   | { name: 'binder'; binder: string }
-  | { name: 'all'; query?: string };
+  | { name: 'search'; query?: string };
+
+/** A card opened from a list: found again in the collection each time (its finish can change). */
+type CardRef = { binder: string; page: number; slot: number; id: string };
 
 let pocketKeys = 0;
 type KeyedPocket = PocketView & { key: number };
@@ -91,6 +98,11 @@ export function App() {
   const [history, setHistory] = useState<PriceHistory>({});
   const [baselines, setBaselines] = useState<Baselines | null>(null);
   const [screen, setScreen] = useState<Screen>({ name: 'home' });
+  const [detail, setDetail] = useState<CardRef | null>(null);
+  // Each screen starts at the top (the card detail is a layer over its list, which keeps its place).
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [screen.name, screen.name === 'binder' ? screen.binder : '']);
   const [spreads, setSpreads] = useState<Spread[]>([]);
   const [pagesPerSpread, setPagesPerSpread] = useState(2);
   const [ocrPending, setOcrPending] = useState(0);
@@ -259,6 +271,32 @@ export function App() {
     setScreen({ name: 'review', binder: meta.binder, fresh: true });
   };
 
+  /** Leaves the scan review without losing it: the scan is saved as a draft to resume from the home screen. */
+  const leaveReview = async () => {
+    if (scanMeta.current && spreadsRef.current.length) {
+      if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
+      await saveDraft({ ...scanMeta.current, pagesPerSpread: pagesRef.current, runStats: runStatsRef.current }, spreadsRef.current);
+      setDraft(await draftSummary());
+    }
+    setScreen({ name: 'home' });
+  };
+
+  /** A saved card's finish was changed on its detail screen. */
+  const changeFinish = async (ref: CardRef, finish: Finish) => {
+    const next: Collection = {
+      binders: collection.binders.map((b) =>
+        b.name !== ref.binder ? b : { ...b, cards: b.cards.map((c) => (c.id === ref.id && c.page === ref.page && c.slot === ref.slot ? { ...c, finish } : c)) },
+      ),
+    };
+    await saveCollection(next);
+    setCollection(next);
+    if (db) setHistory(await recordPrices(db, next, live));
+  };
+
+  const openCard = (r: OwnedRow) => setDetail({ binder: r.binder, page: r.page, slot: r.slot, id: r.id });
+  const detailRow = detail && db ? ownedRows(db, collection, live, history, baselines, detail.binder).find((r) => r.id === detail.id && r.page === detail.page && r.slot === detail.slot) : undefined;
+  const tab = screen.name === 'search' ? 'search' : screen.name === 'home' || screen.name === 'binder' ? 'collections' : null;
+
   /** Removes a binder and its cards from the collection on this phone. */
   const deleteBinder = async (binder: string) => {
     const next: Collection = { binders: collection.binders.filter((b) => b.name !== binder) };
@@ -321,7 +359,7 @@ export function App() {
   };
 
   return (
-    <div className="app">
+    <div className={`app${tab ? ' with-tabs' : ''}`}>
       {screen.name === 'home' && (
         <HomeScreen
           db={db}
@@ -331,21 +369,22 @@ export function App() {
           history={history}
           baselines={baselines}
           refreshing={refreshing}
-          onScan={() => setScreen({ name: 'setup' })}
           onOpenBinder={(b) => setScreen({ name: 'binder', binder: b })}
-          onDeleteBinder={deleteBinder}
+          onNewCollection={() => setScreen({ name: 'setup', create: true })}
+          onOpenCard={openCard}
+          onSeeAll={() => setScreen({ name: 'search' })}
           draft={draft}
           onResume={resumeDraft}
           onDiscardDraft={() => {
             if (draft && confirm(`Discard the unfinished scan of “${draft.binder}”? The ${draft.checked} cards checked so far will be lost.`)) endScan();
           }}
-          onBrowse={(query) => setScreen({ name: 'all', query })}
           onRefresh={refresh}
         />
       )}
       {screen.name === 'setup' && (
         <SetupScreen
           collection={collection}
+          startCreating={!!screen.create}
           englishOnly={englishOnly}
           onEnglishOnly={(on) => {
             setEnglishOnlyState(on);
@@ -409,6 +448,7 @@ export function App() {
           onReadName={(_, p) => p.nameCrop && runOcr((p as KeyedPocket).key, p.nameCrop)}
           checkOnOpen={!!screen.fresh}
           onSave={() => saveBinder(screen.binder)}
+          onLeave={leaveReview}
           onDiscard={() => {
             if (!spreads.length || confirm('Discard this scan?')) {
               endScan();
@@ -419,8 +459,8 @@ export function App() {
           }}
         />
       )}
-      {screen.name === 'all' && db && (
-        <CollectionScreen db={db} collection={collection} live={live} history={history} baselines={baselines} query={screen.query} onBack={() => setScreen({ name: 'home' })} />
+      {screen.name === 'search' && db && (
+        <SearchScreen db={db} collection={collection} live={live} history={history} baselines={baselines} query={screen.query} onOpenCard={openCard} />
       )}
       {screen.name === 'binder' && db && (
         <BinderScreen
@@ -435,6 +475,30 @@ export function App() {
             await deleteBinder(screen.binder);
             setScreen({ name: 'home' });
           }}
+          onOpenCard={openCard}
+        />
+      )}
+      {tab && !detailRow && (
+        <TabBar
+          active={tab}
+          onTab={(t) => setScreen(t === 'search' ? { name: 'search' } : { name: 'home' })}
+          onScan={() => setScreen({ name: 'setup' })}
+          scanDisabled={!db}
+        />
+      )}
+      {detail && detailRow && db && (
+        <CardDetail
+          db={db}
+          row={detailRow}
+          live={live}
+          history={history}
+          baselines={baselines}
+          onClose={() => setDetail(null)}
+          onOpenCollection={(b) => {
+            setDetail(null);
+            setScreen({ name: 'binder', binder: b });
+          }}
+          onChangeFinish={(f) => changeFinish(detail, f)}
         />
       )}
     </div>

@@ -9,6 +9,7 @@ import { RunController, type CaptureMode, type RunStatus } from '../app/run.ts';
 import type { Recognizer, SpreadReading } from '../app/data.ts';
 import { loadCalibration, saveCalibration } from '../app/store.ts';
 import { QuadOverlay } from './QuadOverlay.tsx';
+import { SwitchRow } from './kit.tsx';
 
 export type ScanSource = 'camera' | File | File[];
 
@@ -384,16 +385,16 @@ export function ScanScreen({ binder, source, recognizer, spreadsSoFar, onSpread,
                   </select>
                 </label>
               )}
-              <label className="row small" style={{ gap: 6 }}>
-                <input type="checkbox" checked={sound} onChange={(e) => setSound(e.target.checked)} /> Click sound
-              </label>
+              <SwitchRow checked={sound} onChange={setSound} title="Click sound" />
             </div>
           )}
           {isPhotos && (
-            <label className="row small" style={{ gap: 8 }}>
-              <input type="checkbox" checked={lineUpEach} onChange={(e) => setLineUpEach(e.target.checked)} />
-              <span>Stop on each photo to adjust the outline <span className="muted">(only for photos taken by hand; otherwise this outline is used for every photo, and Pause &amp; adjust changes it)</span></span>
-            </label>
+            <SwitchRow
+              checked={lineUpEach}
+              onChange={setLineUpEach}
+              title="Line up each photo"
+              description="For photos taken by hand. Otherwise this outline is used for every photo, and Pause & adjust changes it."
+            />
           )}
           <p className="muted small" style={{ margin: 0 }}>
             {dims.w}×{dims.h} {sourceWord}{isPhotos ? ` · ${photoCount} photo${photoCount === 1 ? '' : 's'}` : ''}

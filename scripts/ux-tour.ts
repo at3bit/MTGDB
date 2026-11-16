@@ -147,7 +147,7 @@ try {
     });
   }, [page1]);
   await page.reload();
-  await page.waitForFunction(() => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent === 'Scan cards'); return b && !(b as HTMLButtonElement).disabled; }, null, { timeout: 120000 });
+  await page.waitForFunction(() => { const b = [...document.querySelectorAll('button')].find((x) => x.getAttribute('aria-label') === 'Scan cards' || x.textContent === 'Scan cards'); return b && !(b as HTMLButtonElement).disabled; }, null, { timeout: 120000 });
   await shot('01-home-empty');
   await page.getByRole('button', { name: 'Scan cards' }).click();
   await page.getByLabel('New collection name').fill('Black R/UC');
@@ -190,15 +190,28 @@ try {
   await page.getByText(/^All \d+ cards checked$/).waitFor({ timeout: 10000 }).catch(() => {});
   await shot('08-all-checked');
   await page.getByRole('button', { name: /^Save collection$/ }).first().click();
-  await page.getByRole('button', { name: 'Export CSV' }).waitFor({ timeout: 10000 });
+  await page.getByRole('button', { name: 'Collection actions' }).waitFor({ timeout: 10000 });
   await page.waitForTimeout(2500);
   await shot('09-collection-gallery');
   await shot('09b-collection-gallery-full', true);
   await page.getByRole('button', { name: 'List', exact: true }).click();
   await page.waitForTimeout(1500);
   await shot('10-collection-list');
-  await page.getByRole('button', { name: '‹ Home' }).click();
-  // A second collection from one photo.
+  await page.getByRole('button', { name: 'Art', exact: true }).click();
+  await page.waitForTimeout(2500);
+  await shot('10c-collection-art');
+  await page.locator('.art-tile').first().click();
+  await page.waitForTimeout(3000);
+  await shot('10d-card-detail');
+  await shot('10e-card-detail-full', true);
+  await page.getByRole('dialog').getByRole('button', { name: 'Back' }).click();
+  await page.getByRole('button', { name: 'Gallery', exact: true }).click();
+  await page.getByRole('button', { name: 'Collection actions' }).click();
+  await page.waitForTimeout(500);
+  await shot('10f-collection-menu');
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Collections', exact: true }).click();
+
   await page.getByRole('button', { name: 'Scan cards' }).click();
   await shot('11-setup-existing');
   await page.getByRole('button', { name: '+ Create new collection' }).click();
@@ -209,14 +222,14 @@ try {
   await page.getByRole('button', { name: '‹ Pages' }).click({ timeout: 10000 }).catch(() => {});
   await page.getByText(/^Reading card names for/).waitFor({ state: 'detached', timeout: 180000 }).catch(() => {});
   await page.getByRole('button', { name: /^(Save now|Save collection)$/ }).first().click();
-  await page.getByRole('button', { name: 'Export CSV' }).waitFor({ timeout: 10000 });
-  await page.getByRole('button', { name: '‹ Home' }).click();
-  await page.waitForTimeout(1500);
+  await page.getByRole('button', { name: 'Collection actions' }).waitFor({ timeout: 10000 });
+  await page.getByRole('button', { name: 'Collections', exact: true }).click();
+  await page.waitForTimeout(3000);
   await shot('12-home');
   await shot('12b-home-full', true);
-  const firstName = file.cards[picks[1]][1].split(' ')[0];
-  await page.getByLabel('Search your collection').fill(firstName);
+  const firstName = await page.locator('.card-row .card-name').first().textContent();
   await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await page.getByLabel('Search cards').fill((firstName ?? '').replace(' ✦', '').slice(0, 8));
   await page.waitForTimeout(2000);
   await shot('13-search');
 } catch (e) {

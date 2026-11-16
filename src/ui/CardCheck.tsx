@@ -176,7 +176,7 @@ export function CardCheck({ db, live, pocket, location, position, onSave, onBack
       )}
       <div className="topbar">
         <button className="back" onClick={onClose}>‹ Pages</button>
-        <h1 className="ellipsis">{position ? `Card ${position.index} of ${position.total}` : 'Check card'}</h1>
+        <h2 className="ellipsis">{position ? `Card ${position.index} of ${position.total}` : 'Check card'}</h2>
       </div>
       <div className="muted small check-where">
         {location}
@@ -275,7 +275,6 @@ export function CardCheck({ db, live, pocket, location, position, onSave, onBack
         </div>
       )}
       {note && <div className="notice small" style={{ marginTop: 12, marginBottom: 0 }}>{note}</div>}
-      {pocket.ocrText != null && <div className="muted small" style={{ marginTop: 8 }}>Name read from the card: “{pocket.ocrText || '…'}”</div>}
       <div className="row" style={{ marginTop: 12, gap: 8, flexWrap: 'wrap' }}>
         {onReadName && pocket.nameCrop && <button className="btn small" onClick={onReadName}>Read name again</button>}
         <button className="btn small" onClick={() => onSave(approveEmpty(pocket))}>No card here (empty)</button>

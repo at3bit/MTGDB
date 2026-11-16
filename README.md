@@ -229,8 +229,7 @@ link. Each person's collection is stored only on their own phone.
   and keeps everything captured up to then, rather than freezing.
 - Quantities aren't tracked: a collection stores one entry per printing (and
   finish), and the totals count each printing once.
-- **Delete a collection** from the home screen's list (Delete, then confirm)
-  or with Delete collection at the top of its page.
+- **Delete a collection** from its ⋯ menu (Delete collection, then confirm).
 - **Autosave**: a scan in progress is saved on the phone (IndexedDB) as each
   photo is read, after every 5 Save + continue taps, when the scan finishes
   and whenever the app goes to the background. If the app crashes or iOS
@@ -251,7 +250,7 @@ link. Each person's collection is stored only on their own phone.
   still finds them.
 - **Printing tips** ("several printings look alike…", "…like the other cards
   on this page") show as a toast for a few seconds, with Don't show again.
-- **Scan report** (on each collection's page, **Share scan report**): for
+- **Scan report** (each collection's ⋯ menu, **Share scan report**): for
   every card scanned into the collection, what the app read (its 5 closest
   matches and how close, the name it read, its flags) next to what was saved
   after the card check, whether you changed it, and the card's photo, as a zip
@@ -262,7 +261,7 @@ link. Each person's collection is stored only on their own phone.
   to the autosave's file, deleted once the collection is saved: sharing then
   failed with "The object can not be found here"); a photo that can't be read
   is left out of the zip instead of failing it.
-- **Export CSV** (collection page, or All cards) opens the share sheet (Save
+- **Export CSV** (a collection's ⋯ menu, or Export every card on the Search tab) opens the share sheet (Save
   to Files, Google Drive, …): name, set, collector number, finish, price,
   collection, page, slot and Scryfall ID of each card.
 - Memory, for big binders (a crash at about 450 of 900 cards on an iPhone):
@@ -271,8 +270,32 @@ link. Each person's collection is stored only on their own phone.
   them); the name reader (Tesseract) is restarted every 120 reads, because its
   memory only grows; the pages aren't drawn under the card check, and their
   photos load as they're scrolled to.
-- **Do I own…?** on the home screen searches every collection; **Browse all**
-  lists the whole collection with the same views, sorts and search.
+- **Search** (tab bar) searches every collection ("do I own this?") with the
+  same views and sorts, and lists matching cards you don't own yet.
+
+## Screens and design
+
+The interface follows the **MTGDB Design System** in Figma ("Obsidian and
+gilt"): near-black surfaces, parchment text, one gold accent for actions and
+focus, Fraunces for titles and card names and Inter for everything else
+(loaded from Google Fonts, with system fallbacks offline). The colour and size
+tokens in `src/ui/styles.css` use the same names as the Figma variables' code
+syntax. Every control is at least 44 pt tall with a 3.5:1 outline and a
+visible focus ring; `npm run ux` re-measures this.
+
+- **Tab bar**: Collections, the raised gold **Scan** button, and Search.
+- **Collections** (home): the portfolio total and its 30-day change, a tile
+  per collection in its colour (chosen on the scan screen, or the colour most
+  of its cards share) with the art of its most valuable card, Worth selling
+  now and Most valuable.
+- **A collection**: a header tinted with its colour and best card's art, then
+  its cards as a Gallery, a List or Art (each card's illustration). Export,
+  Share scan report and Delete are in the ⋯ menu.
+- **Card detail** (tap any card): its art fills the screen behind it; price
+  and 30-day change, the price history recorded on this phone, where it lives
+  (collection, page and slot, printing) and its finish, which can be changed.
+- **Scan review**: Back keeps the scan as a draft to resume from the home
+  screen; Discard scan and Share scan diagnostics are in its ⋯ menu.
 
 ## Prices and sell signals
 

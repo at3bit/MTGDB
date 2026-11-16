@@ -31,6 +31,11 @@ export function scryfallImage(id: string, size: 'small' | 'normal' = 'normal') {
   return `https://cards.scryfall.io/${size}/front/${id[0]}/${id[1]}/${id}.jpg`;
 }
 
+/** Just the illustration (Scryfall's art crop), for tiles and backdrops. */
+export function scryfallArt(id: string) {
+  return `https://cards.scryfall.io/art_crop/front/${id[0]}/${id[1]}/${id}.jpg`;
+}
+
 export function scryfallPage(set: string, cn: string) {
   return `https://scryfall.com/card/${set}/${encodeURIComponent(cn)}`;
 }

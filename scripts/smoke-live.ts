@@ -90,7 +90,7 @@ try {
     });
   }, SCENE_PAGES);
   await page.reload();
-  await page.waitForFunction(() => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent === 'Scan cards'); return b && !(b as HTMLButtonElement).disabled; }, null, { timeout: 120000 });
+  await page.waitForFunction(() => { const b = [...document.querySelectorAll('button')].find((x) => x.getAttribute('aria-label') === 'Scan cards' || x.textContent === 'Scan cards'); return b && !(b as HTMLButtonElement).disabled; }, null, { timeout: 120000 });
   console.log(`card database loaded from ${url} in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
   console.log(`  ${await page.locator('p.muted.small').last().textContent()}`);
   await page.getByRole('button', { name: 'Scan cards' }).click();
@@ -111,7 +111,7 @@ try {
   await page.waitForTimeout(1000);
   await page.screenshot({ path: join(out, 'review.png'), fullPage: true });
   const tiles: { cls: string; name: string }[] = await page.locator('.tile').evaluateAll((els: Element[]) => els.map((e) => ({ cls: e.className, name: e.querySelector('.name')?.textContent ?? '' })));
-  const spreads = await page.locator('strong', { hasText: /^Spread \d+$/ }).count();
+  const spreads = await page.getByTestId('spread').count();
   let right = 0;
   tiles.forEach((t, i) => {
     const want = file.cards[picks[i]][1];

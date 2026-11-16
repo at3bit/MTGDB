@@ -199,7 +199,7 @@ try {
   await page.waitForTimeout(500);
   await page.screenshot({ path: join(out, '5-review.png'), fullPage: true });
 
-  const spreadCount = await page.locator('strong', { hasText: /^Spread \d+$/ }).count();
+  const spreadCount = await page.getByTestId('spread').count();
   check(spreadCount === 3, `3 spreads captured (got ${spreadCount}); the hand pass-over was not counted as a new spread`);
   const tiles: { cls: string; name: string }[] = await page.locator('.tile').evaluateAll((els: Element[]) => els.map((e) => ({ cls: e.className, name: e.querySelector('.name')?.textContent ?? '' })));
   const expected = spreadIds.flatMap((ids) => ids.map((id) => (id >= 0 ? `Synthetic Card ${String(id).padStart(3, '0')}` : 'Empty')));
@@ -216,7 +216,9 @@ try {
   const photo = await page.locator('.tile img').first().evaluate((img: HTMLImageElement) => ({ w: img.naturalWidth, url: img.src.slice(0, 5) }));
   check(photo.w > 146 && photo.url === 'blob:', `review photos cut from the frame: ${photo.w} px wide (was 146), ${photo.url} URLs`);
   // Diagnostics: the captured photos and readings, as a zip.
+  await page.getByRole('button', { name: 'Scan actions' }).click();
   const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Share scan diagnostics' }).click()]);
+  await page.keyboard.press('Escape');
   const zipPath = join(out, 'diagnostics.zip');
   await download.saveAs(zipPath);
   const zipped = unzipSync(readFileSync(zipPath));
@@ -252,7 +254,7 @@ try {
   const ticks = await page.locator('.tile .name', { hasText: '✓' }).count();
   check(ticks === 2 && (await page.getByRole('button', { name: /^Check cards \(2\// }).count()) === 1, `checked cards marked on the pages (${ticks}) and counted`);
   await page.getByRole('button', { name: /^(Save now|Save collection)$/ }).click();
-  await page.getByRole('button', { name: 'Export CSV' }).waitFor({ timeout: 10000 });
+  await page.getByRole('button', { name: 'Collection actions' }).waitFor({ timeout: 10000 });
   await page.screenshot({ path: join(out, '7-binder-gallery.png'), fullPage: true });
   const identified = tiles.filter((t) => !['Empty', 'Not identified', 'Check', '—'].includes(t.name) && !t.name.endsWith('?')).length;
   // List view, sorted by price (the binder's default sort).
@@ -268,15 +270,22 @@ try {
   await page.getByLabel('Search cards').fill(someName);
   const summary = await page.getByTestId('cards-summary').textContent();
   check(/^1 match/.test(summary ?? '') && (await listRows.count()) === 1, `search “${someName}” in the binder: ${summary}`);
-  await page.getByRole('button', { name: '‹ Home' }).click();
+  // Tapping a card opens its detail screen over the list; Back returns to the list as it was.
+  await listRows.first().locator('.card-row').click();
+  const detailName = await page.getByRole('dialog').getByRole('heading', { level: 1 }).textContent();
+  const detailPrice = await page.getByRole('dialog').getByText('Market price').count();
+  await page.getByRole('dialog').getByRole('button', { name: 'Back' }).click();
+  const stillSearched = await page.getByTestId('cards-summary').textContent();
+  check(detailName === someName && detailPrice === 1 && stillSearched === summary, `card detail opens from the list (${detailName}) and Back keeps the search (${stillSearched})`);
+  await page.getByRole('button', { name: 'Collections', exact: true }).click();
   // "Do I own…?" from the home screen.
-  await page.getByLabel('Search your collection').fill(someName.replace('Synthetic ', ''));
   await page.getByRole('button', { name: 'Search', exact: true }).click();
-  await page.getByText('All cards').waitFor();
+  await page.getByRole('heading', { name: 'Search' }).waitFor();
+  await page.getByLabel('Search cards').fill(someName.replace('Synthetic ', ''));
   const found = await page.getByTestId('cards-summary').textContent();
   check(/^1 match/.test(found ?? ''), `home search finds it in the collection: ${found}`);
   await page.screenshot({ path: join(out, '8-search.png'), fullPage: true });
-  await page.getByRole('button', { name: '‹ Home' }).click();
+  await page.getByRole('button', { name: 'Collections', exact: true }).click();
   await page.screenshot({ path: join(out, '8-home-after.png'), fullPage: true });
 
   // With a collection saved, the setup screen offers it in a list, and Create new collection for a new one.
@@ -308,11 +317,12 @@ try {
   await page.getByRole('button', { name: '‹ Pages' }).click({ timeout: 10000 });
   await page.waitForTimeout(500);
   await page.screenshot({ path: join(out, '9-quick-flips.png'), fullPage: true });
-  const fastSpreads = await page.locator('strong', { hasText: /^Spread \d+$/ }).count();
+  const fastSpreads = await page.getByTestId('spread').count();
   const fastTiles: string[] = await page.locator('.tile').evaluateAll((els: Element[]) => els.map((e) => e.querySelector('.name')?.textContent ?? ''));
   const fastRight = fastTiles.filter((n, i) => n === expected[i]).length;
   check(fastSpreads === 3 && fastRight >= 52, `quick flips: ${fastSpreads} spreads (expected 3), ${fastRight}/${fastTiles.length} pockets right`);
-  await page.getByRole('button', { name: /Home|Discard|Cancel/ }).first().click().catch(() => {});
+  await page.getByRole('button', { name: 'Scan actions' }).click().catch(() => {});
+  await page.getByRole('button', { name: 'Discard scan' }).click().catch(() => {});
 
   const uploadRun = async (name: string, path: string) => {
     await newCollection(name);
@@ -326,7 +336,7 @@ try {
     // Close the card-by-card check that opens after a scan, to read the pages.
     const pages = page.getByRole('button', { name: '‹ Pages' });
     if (await pages.count()) await pages.click();
-    const spreads = await page.locator('strong', { hasText: /^Spread \d+$/ }).count();
+    const spreads = await page.getByTestId('spread').count();
     const names: string[] = await page.locator('.tile').evaluateAll((els: Element[]) => els.map((e) => (e.querySelector('.name')?.textContent ?? '').replace(/^✓ /, '')));
     return { spreads, right: names.filter((n, i) => n === expected[i]).length, total: names.length };
   };
@@ -375,7 +385,8 @@ try {
   const ticked = await page.locator('.tile .name', { hasText: '✓' }).count();
   check(seeksPaused <= 1 && paused.spreads === 3 && paused.right >= 52, `pause & adjust mid-upload: video held while paused (${seeksPaused} seeks), then ${paused.spreads} spreads, ${paused.right}/${paused.total} pockets right`);
   check(ticked === 5, `resumed scan keeps the 5 checked cards (${ticked} ticked)`);
-  await page.getByRole('button', { name: /Discard/ }).click();
+  await page.getByRole('button', { name: 'Scan actions' }).click();
+  await page.getByRole('button', { name: 'Discard scan' }).click();
   await page.getByRole('button', { name: 'Scan cards' }).waitFor();
   check((await page.getByTestId('resume').count()) === 0, 'discarding the scan forgets the autosave');
 
@@ -385,7 +396,8 @@ try {
   await page.getByText('Review “Dropped Seek”').waitFor({ timeout: 120000 });
   const dropped = await reviewed();
   check(dropped.spreads === 3 && dropped.right >= 52, `a dropped seek is retried: ${dropped.spreads} spreads, ${dropped.right}/${dropped.total} pockets right`);
-  await page.getByRole('button', { name: /Discard/ }).click();
+  await page.getByRole('button', { name: 'Scan actions' }).click();
+  await page.getByRole('button', { name: 'Discard scan' }).click();
 
   // A video that stops responding part-way: the scan says so and keeps what it captured.
   await uploadRun('Dead Video', videoPath);
@@ -398,7 +410,8 @@ try {
   const dead = await reviewed();
   check(dead.spreads >= 1 && /stopped responding/.test(message ?? ''), `video stops responding: "${message}"; ${dead.spreads} spread(s) kept for review`);
   await page.evaluate(() => ((window as any).__seeks = { n: 0, drop: [], deadFrom: Infinity }));
-  await page.getByRole('button', { name: /Discard/ }).click();
+  await page.getByRole('button', { name: 'Scan actions' }).click();
+  await page.getByRole('button', { name: 'Discard scan' }).click();
 
   // Photos (two of each spread): the outline set at the start is used for the whole batch, with no stops,
   // until Pause & adjust, which stops on one photo; Continue carries on to the end.
@@ -422,7 +435,8 @@ try {
     stop <= onScreen + 1 && fromPhotos.spreads === 3 && fromPhotos.right >= 52,
     `photo batch: Pause & adjust stopped on photo ${stop} (photo ${onScreen} was on screen; ${latency} ms), that photo was read again, then ${fromPhotos.spreads} spreads, ${fromPhotos.right}/${fromPhotos.total} pockets right`,
   );
-  await page.getByRole('button', { name: /Discard/ }).click();
+  await page.getByRole('button', { name: 'Scan actions' }).click();
+  await page.getByRole('button', { name: 'Discard scan' }).click();
 
   // Scanning more cards into a saved collection adds them after its pages.
   const extraIds = Array.from({ length: 18 }, (_, i) => 250 + i);
@@ -444,10 +458,11 @@ try {
   await page.getByRole('button', { name: 'Save + continue' }).click();
   await reviewed();
   await page.getByRole('button', { name: /^(Save now|Save collection)$/ }).click();
-  await page.getByRole('button', { name: 'Export CSV' }).waitFor({ timeout: 10000 });
+  await page.getByRole('button', { name: 'Collection actions' }).waitFor({ timeout: 10000 });
   const nowHas = Number((await page.getByTestId('cards-summary').textContent())?.match(/^(\d+) card/)?.[1]);
   check(had === 53 && nowHas >= had + 16 && nowHas <= had + 18, `adding a scan to a saved collection: ${had} cards + 18 new -> ${nowHas}`);
   // The scan report: both scans of the collection, what the app read against what was saved, with photos.
+  await page.getByRole('button', { name: 'Collection actions' }).click();
   const reportRow = page.getByText(/^Scan report:/);
   await reportRow.waitFor({ timeout: 10000 });
   const reportLabel = (await reportRow.textContent()) ?? '';
@@ -466,19 +481,23 @@ try {
   const [csvDl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export CSV' }).click()]);
   const csv = readFileSync(await csvDl.path(), 'utf8').split('\n');
   check(csv[0].includes(',Collection,Page,Slot,') && csv.length === nowHas + 1, `CSV export: ${csv.length - 1} rows, header "${csv[0].slice(0, 60)}…"`);
-  await page.getByRole('button', { name: '‹ Home' }).click();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Collections', exact: true }).click();
 
-  // Delete a saved binder straight from the home screen's list (the confirm dialog is accepted).
-  await page.getByRole('button', { name: 'Delete Trade Binder' }).click();
+  // Delete a saved collection from its menu (the confirm dialog is accepted).
+  await page.getByRole('button', { name: /^Trade Binder:/ }).click();
+  await page.getByRole('button', { name: 'Collection actions' }).click();
+  await page.getByRole('button', { name: 'Delete collection' }).click();
+  await page.getByTestId('portfolio-total').waitFor();
   await page.waitForTimeout(500);
-  const binderRows = await page.getByRole('button', { name: /^Delete / }).count();
+  const binderRows = await page.locator('.ctile:not(.new)').count();
   const stored = await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve) => { const r = indexedDB.open('keyval-store'); r.onsuccess = () => resolve(r.result); });
     const keys = await new Promise<IDBValidKey[]>((resolve) => { const r = db.transaction('keyval').objectStore('keyval').getAllKeys(); r.onsuccess = () => resolve(r.result); });
     const col = await Promise.all(keys.map((k) => new Promise<unknown>((resolve) => { const r = db.transaction('keyval').objectStore('keyval').get(k); r.onsuccess = () => resolve(r.result); })));
     return JSON.stringify(col).includes('Trade Binder') || keys.some((k) => String(k).startsWith('report'));
   });
-  check(binderRows === 0 && !stored, `collection deleted from the home screen, with its scan report (${binderRows} left; anything still stored: ${stored})`);
+  check(binderRows === 0 && !stored, `collection deleted from its menu, with its scan report (${binderRows} left; anything still stored: ${stored})`);
 } catch (e) {
   failed = true;
   console.error(e);
@@ -585,7 +604,7 @@ try {
   await cam.getByText('Review “Camera binder”').waitFor({ timeout: 60000 });
   // The card-by-card check opens over the pages (which aren't drawn under it); close it to read them.
   await cam.getByRole('button', { name: '‹ Pages' }).click({ timeout: 10000 });
-  const camSpreads = await cam.locator('strong', { hasText: /^Spread \d+$/ }).count();
+  const camSpreads = await cam.getByTestId('spread').count();
   const camTiles: string[] = await cam.locator('.tile .name').allTextContents();
   const want = spreadIds.slice(0, 2).flatMap((ids) => ids.map((id) => (id >= 0 ? `Synthetic Card ${String(id).padStart(3, '0')}` : 'Empty')));
   const camRight = camTiles.filter((n, i) => n === want[i]).length;

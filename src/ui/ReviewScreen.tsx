@@ -8,6 +8,7 @@ import { binderEntries, checkList, findPocket, nameUnsure, needsCheck, pocketPri
 import { trendFor, type PriceHistory } from '../app/store.ts';
 import { CardsView, type CardItem } from './CardsView.tsx';
 import { CardCheck } from './CardCheck.tsx';
+import { ActionRow, ActionSheet, IconButton } from './kit.tsx';
 
 interface Props {
   db: CardDB;
@@ -22,6 +23,8 @@ interface Props {
   onUpdate: (spreadId: number, pocket: PocketView) => void;
   onReadName: (spreadId: number, pocket: PocketView) => void;
   onSave: () => void;
+  /** Back: leave the review; the scan is kept as a draft to resume from the home screen. */
+  onLeave: () => void;
   onDiscard: () => void;
   /** Start the card-by-card check straight away (right after a scan). */
   checkOnOpen?: boolean;
@@ -51,8 +54,9 @@ function pocketClass(p: PocketView): string {
   return needsCheck(p) ? 'uncertain' : 'matched';
 }
 
-export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, history, baselines, ocrPending, runStats, onUpdate, onReadName, onSave, onDiscard, checkOnOpen }: Props) {
+export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, history, baselines, ocrPending, runStats, onUpdate, onReadName, onSave, onLeave, onDiscard, checkOnOpen }: Props) {
   const [sharing, setSharing] = useState(false);
+  const [menu, setMenu] = useState(false);
   /** The card-by-card check: the pockets being checked and which one is showing (index === length: all done). */
   const [check, setCheck] = useState<{ keys: PocketKey[]; i: number; single: boolean } | null>(() => {
     if (!checkOnOpen) return null;
@@ -120,14 +124,14 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
   const pageGrids = () =>
     spreads.map((s, si) => (
       <div className="card" key={s.id}>
-        <div className="row spread">
-          <strong>Spread {si + 1}</strong>
+        <div className="row spread" data-testid="spread">
+          <strong>{pagesPerSpread === 2 ? `Pages ${si * 2 + 1}–${si * 2 + 2}` : `Page ${si + 1}`}</strong>
           <span className="num">{formatUSD(spreadTotal(db, s, live))}</span>
         </div>
         <div className={pagesPerSpread === 2 ? 'pages-2' : ''}>
           {Array.from({ length: pagesPerSpread }, (_, page) => (
             <div key={page}>
-              <div className="page-label">{pageName(si, page)}</div>
+              {pagesPerSpread === 2 && <div className="page-label">{pageName(si, page)}</div>}
               {s.pockets.filter((p) => p.page === page && p.blurry && !p.ghost).length >= 3 && (
                 <div className="blurry-note">Blurry photo: check these cards, or scan this page again with focus locked.</div>
               )}
@@ -160,8 +164,9 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
   return (
     <div>
       <div className="topbar">
-        <button className="back" onClick={onDiscard}>‹ Discard</button>
+        <IconButton icon="back" label="Back (the scan is kept)" onClick={onLeave} />
         <h1 className="ellipsis">Review “{binder}”</h1>
+        <IconButton icon="more" label="Scan actions" onClick={() => setMenu(true)} />
       </div>
       <div className="card">
         <div className="big-number">{formatUSD(total)}</div>
@@ -172,18 +177,21 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
         </div>
         {runStats.captures > 0 && (
           <div className="muted small" style={{ marginTop: 6 }} data-testid="run-stats">
-            {spreads.length} spread{spreads.length === 1 ? '' : 's'} ({spreads.length * pagesPerSpread} pages) from {runStats.captures} capture{runStats.captures === 1 ? '' : 's'}
+            {spreads.length * pagesPerSpread} page{spreads.length * pagesPerSpread === 1 ? '' : 's'} read from {runStats.captures} {runStats.captures === 1 ? 'shot' : 'shots'}
             {runStats.repeats > 0 && ` · ${runStats.repeats} repeat${runStats.repeats === 1 ? '' : 's'} merged`}
             {runStats.reread > 0 && ` · ${runStats.reread} page${runStats.reread === 1 ? '' : 's'} re-read`}
-            . Fewer pages than your binder has? Pause about half a second on each spread, or use Snap page.
+            . Missing a page? Scan it again later and add it to this collection.
           </div>
         )}
         {ocrPending > 0 && <div className="muted small" style={{ marginTop: 6 }}>Reading card names for {ocrPending} pocket{ocrPending === 1 ? '' : 's'}… wait for this before saving.</div>}
-        {diagnostics.hasRun && (
-          <div className="row small" style={{ marginTop: 8, gap: 8, flexWrap: 'wrap' }}>
-            <span className="muted">Scan look wrong?</span>
-            <button
-              className="btn small"
+      </div>
+      {menu && (
+        <ActionSheet title={`Scan of “${binder}”`} subtitle={`${entries.length} cards · ${formatUSD(total)}`} onClose={() => setMenu(false)}>
+          {diagnostics.hasRun && (
+            <ActionRow
+              icon="share"
+              label={sharing ? 'Packing…' : 'Share scan diagnostics'}
+              note="For when the scan looks wrong"
               disabled={sharing}
               onClick={async () => {
                 setSharing(true);
@@ -195,17 +203,24 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
                   setSharing(false);
                 }
               }}
-            >
-              {sharing ? 'Packing…' : 'Share scan diagnostics'}
-            </button>
-          </div>
-        )}
-      </div>
+            />
+          )}
+          <ActionRow
+            icon="trash"
+            label="Discard scan"
+            danger
+            onClick={() => {
+              setMenu(false);
+              onDiscard();
+            }}
+          />
+        </ActionSheet>
+      )}
       {spreads.length === 0 ? (
-        <div className="notice">No spreads were captured. Make sure the outline matches the pages and that each spread is held still for about half a second.</div>
+        <div className="notice">No pages were read. Check that the outline matches the pages, then scan again.</div>
       ) : (
         // While checking card by card, the pages aren't drawn underneath (hundreds of photos in a big binder).
-        check && !check.single ? null : <CardsView db={db} items={items} storageKey="review" orderGallery={pageGrids} />
+        check && !check.single ? null : <CardsView db={db} items={items} storageKey="review" orderGallery={pageGrids} views={['gallery', 'list']} statusTiles />
       )}
       {check && checking && checkingPocket && (
         <CardCheck
@@ -239,21 +254,21 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
       )}
       <div className="savebar">
         <div>
-          <div className="grow">
-            <div className="num" style={{ fontWeight: 700 }}>{formatUSD(total)}</div>
-            <div className="muted small">{counts.check > 0 ? `${counts.check} to check (orange/red)` : 'All pockets identified'}</div>
+          <div className="savebar-status">
+            <span className="num" style={{ fontWeight: 600 }}>{formatUSD(total)}</span>
+            <span className="muted"> · {counts.check > 0 ? `${counts.check} card${counts.check === 1 ? '' : 's'} to check` : 'all cards identified'}</span>
           </div>
           {checked < toCheck.length ? (
             <>
-              <button className="btn small" onClick={onSave} disabled={!spreads.length}>
+              <button className="btn" onClick={onSave} disabled={!spreads.length}>
                 Save now
               </button>
-              <button className="btn primary" onClick={startCheck}>
+              <button className="btn primary grow" onClick={startCheck}>
                 Check cards ({checked}/{toCheck.length})
               </button>
             </>
           ) : (
-            <button className="btn primary" onClick={onSave} disabled={!spreads.length}>
+            <button className="btn primary grow" onClick={onSave} disabled={!spreads.length}>
               Save collection
             </button>
           )}
