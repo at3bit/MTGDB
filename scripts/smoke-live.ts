@@ -10,7 +10,7 @@ import { mkdirSync, readFileSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
-import type { CardsFile } from '../src/core/carddb.ts';
+import { NOT_FOR_MATCHING, type CardsFile } from '../src/core/carddb.ts';
 import type { RGBAImage } from '../src/core/image.ts';
 import { renderSpread, rng, SCENE_PAGES } from '../tests/synth.ts';
 
@@ -29,7 +29,8 @@ const valuable = file.cards.map((_, i) => i).filter((i) => (file.cards[i][6] ?? 
 const picks: number[] = [];
 while (picks.length < 36) {
   const i = picks.length % 2 ? valuable[Math.floor(r() * valuable.length)] : Math.floor(r() * file.cards.length);
-  if (!picks.includes(i)) picks.push(i);
+  // Parody and playtest sets are left out of picture matching on purpose (see CardDB.matchable).
+  if (!picks.includes(i) && !NOT_FOR_MATCHING.has(file.cards[i][2])) picks.push(i);
 }
 console.log('downloading 36 card scans…');
 const scans: RGBAImage[] = await Promise.all(
@@ -103,7 +104,11 @@ try {
   await page.screenshot({ path: join(out, 'check.png'), fullPage: false });
   console.log(`card check: ${await page.getByRole('heading', { name: /^Card 1 of \d+$/ }).textContent()}`);
   await page.getByRole('button', { name: '‹ Pages' }).click();
-  await page.waitForTimeout(2000);
+  // Let the name and collector-line reads finish (they settle cards the picture left unsure).
+  const t1 = Date.now();
+  await page.getByText(/^Reading card names for/).waitFor({ state: 'detached', timeout: 180000 }).catch(() => {});
+  console.log(`name reads done ${((Date.now() - t1) / 1000).toFixed(1)} s after the pages opened`);
+  await page.waitForTimeout(1000);
   await page.screenshot({ path: join(out, 'review.png'), fullPage: true });
   const tiles: { cls: string; name: string }[] = await page.locator('.tile').evaluateAll((els: Element[]) => els.map((e) => ({ cls: e.className, name: e.querySelector('.name')?.textContent ?? '' })));
   const spreads = await page.locator('strong', { hasText: /^Spread \d+$/ }).count();
