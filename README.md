@@ -306,6 +306,7 @@ npm run data:version # public/data/version.json: content hashes of the data file
 npm run eval         # accuracy on real card scans in simulated binder photos (after data)
 npm run smoke -- https://mtgdb.vercel.app   # upload a real-card binder video to a deployed site and check the results
 npm run sim          # simulate scanning a big binder (drifting pages, nudges, auto-exposure, resting hands) and report losses
+npm run ux -- https://mtgdb.vercel.app      # design audit: screenshot every screen at iPhone size, measure contrast, tap targets and text sizes
 npm run dev          # local dev server (https is needed for the camera on a phone; see below)
 npm test             # unit + synthetic recognition tests
 npm run typecheck
