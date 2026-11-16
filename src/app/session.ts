@@ -1,6 +1,6 @@
 // The results of one binder run, as shown in the review screen.
 import type { Match } from '../core/fingerprint.ts';
-import { originSet, pageSetChoice, resolvePrinting, rankPrintings as rankPrintingsCore, type RankedPrinting } from '../core/printing.ts';
+import { isTwin, lookalikeSets, originSet, parseCollectorLine, printingFromCollector, printingInSet, resolvePrinting, rankPrintings as rankPrintingsCore, type RankedPrinting } from '../core/printing.ts';
 import { DEFAULT_RECOGNIZE, type PocketStatus } from '../core/recognize.ts';
 import type { CardDB, Finish } from '../core/carddb.ts';
 import type { WireImage, WirePocket } from './protocol.ts';
@@ -16,6 +16,12 @@ export interface PocketView {
   query?: Uint32Array;
   /** Title-line crop for reading the name (pixels, or a JPEG). Dropped once a matched card's name is read. */
   nameCrop?: WireImage | Blob;
+  /** The collector line (a JPEG), read once to tell look-alike printings apart; dropped after. */
+  infoCrop?: Blob;
+  /** What was read from the collector line. */
+  infoText?: string;
+  /** The printing was read off the collector line: page context leaves it alone. */
+  printingRead?: boolean;
   /** The review photo itself (thumbUrl points at it), kept so an unfinished scan can be saved (see draft.ts). */
   photo?: Blob;
   /** Stable id of this pocket reading, for the saved draft. */
@@ -103,7 +109,24 @@ export function releasePhotos() {
   for (const url of photoUrls.splice(0)) URL.revokeObjectURL(url);
 }
 
-export function toPocketView(p: WirePocket, db: CardDB): PocketView {
+/**
+ * A card the app isn't sure of whose closest match isn't one of the binder's colours: the closest one
+ * that is comes first. Unsure off-colour guesses were all wrong on a real black binder (a green Ooze for
+ * Grim Return, a Plains for Stitch Together). A confident off-colour match (a misfiled card) stays.
+ */
+function inColourFirst(p: WirePocket, db: CardDB): Match[] {
+  const pref = db.preferred;
+  const best = p.matches[0];
+  if (!pref || !best || p.status !== 'uncertain' || !p.offCategory) return p.matches;
+  const confident = best.d <= ACCEPT.acceptDistance && p.otherNameDistance - best.d >= ACCEPT.acceptMargin;
+  const i = p.matches.findIndex((m) => pref[m.card]);
+  if (confident || i <= 0) return p.matches;
+  return [p.matches[i], ...p.matches.filter((_, k) => k !== i)];
+}
+
+export function toPocketView(w: WirePocket, db: CardDB): PocketView {
+  const reordered = inColourFirst(w, db);
+  const p = reordered === w.matches ? w : { ...w, matches: reordered, offCategory: false };
   const chosen = p.status === 'empty' || !p.matches.length || p.status === 'unknown' ? null : p.matches[0].card;
   return settlePrinting(
     {
@@ -118,6 +141,7 @@ export function toPocketView(p: WirePocket, db: CardDB): PocketView {
       pid: newPid(),
       query: p.query ? Uint32Array.from(p.query) : undefined,
       nameCrop: p.nameJpeg ?? p.nameCrop,
+      infoCrop: p.infoJpeg,
       chosen,
       finish: 'nonfoil',
       via: chosen === null ? null : 'image',
@@ -147,27 +171,39 @@ export function settlePrinting(p: PocketView, db: CardDB): PocketView {
 }
 
 /**
- * Binders are usually sorted by set: among printings that look the same, each card the app identified
- * takes the one from the set most other cards on its page are from (a Legions page keeps Legions cards
- * rather than their List reprints). Cards the user picked count towards a page's set and aren't changed.
+ * Binders are usually sorted by set. A page's set is the one the most cards on it could be from, judging
+ * by the look of their printings (lookalikeSets): the app's own picks can scatter over reprints (a page
+ * of Magic 2010 cards read as 10th Edition, Duel Deck and Fifth Dawn reprints), but most of the cards
+ * have a look-alike in Magic 2010. If one set covers at least 2 of the other cards on the page, and 40% of
+ * them, each card the app identified takes its look-alike printing from that set (printingInSet).
+ * Cards the user picked count with the set they picked and aren't changed.
  */
 export function preferPageSets(spread: Spread, db: CardDB): Spread {
   const counted = (p: PocketView) => p.chosen !== null && p.status === 'matched' && !p.ghost && !p.cardBack;
-  const sets = new Map<number, Map<string, number>>();
+  const setsOf = new Map<PocketView, Set<string>>();
   for (const p of spread.pockets) {
-    if (!counted(p)) continue;
-    const m = sets.get(p.page) ?? new Map<string, number>();
-    const set = originSet(db.info(p.chosen!));
-    m.set(set, (m.get(set) ?? 0) + 1);
-    sets.set(p.page, m);
+    if (counted(p)) setsOf.set(p, p.via === 'manual' || p.printingRead ? new Set([originSet(db.info(p.chosen!))]) : lookalikeSets(db, p.chosen!));
   }
   let changed = false;
   const pockets = spread.pockets.map((p) => {
-    if (!counted(p) || p.via === 'manual') return p;
-    const others = new Map(sets.get(p.page));
-    const own = originSet(db.info(p.chosen!));
-    others.set(own, (others.get(own) ?? 1) - 1);
-    const pick = pageSetChoice(db, p.chosen!, others, p.query);
+    if (!counted(p) || p.via === 'manual' || p.printingRead) return p;
+    // How many of the other cards on this page each set covers.
+    const cover = new Map<string, number>();
+    let others = 0;
+    for (const [q, sets] of setsOf) {
+      if (q === p || q.page !== p.page) continue;
+      others++;
+      for (const s of sets) cover.set(s, (cover.get(s) ?? 0) + 1);
+    }
+    let top: string | null = null, n = 0, tied = false;
+    for (const [s, k] of cover) {
+      if (k > n) [top, n, tied] = [s, k, false];
+      else if (k === n) tied = true;
+    }
+    if (!top || tied || n < 2 || n < 0.4 * others) return p;
+    const info = db.info(p.chosen!);
+    if (originSet(info) === top && !isTwin(info)) return p;
+    const pick = printingInSet(db, p.chosen!, top, p.query);
     if (pick === null || pick === p.chosen) return p;
     changed = true;
     return { ...p, chosen: pick, finish: finishFor(db, pick, p.finish), pageSet: db.info(pick).set };
@@ -390,7 +426,9 @@ export function rankPrintings(db: CardDB, nameIdx: number, pocket?: Pick<PocketV
   return rankPrintingsCore(db, nameIdx, pocket?.query, pocket?.borderLuma);
 }
 
-/** Applies an OCR reading of the title line to a pocket. */
+/** A read this good is shown as the first guess for a card the picture didn't settle (see applyOcr). */
+const FAIR_READ = 0.65;
+
 /**
  * Uses the card's printed name, read with OCR. For a card the image match identified, it's a cross-check:
  * agreeing confirms it, a clean read of a different name flags it. For one it didn't, the name identifies
@@ -398,7 +436,7 @@ export function rankPrintings(db: CardDB, nameIdx: number, pocket?: Pick<PocketV
  * so a misread never turns into a confident wrong card.
  */
 export function applyOcr(p: PocketView, text: string, db: CardDB): PocketView {
-  const hits = db.fuzzyNames(text, 3);
+  const hits = db.readName(text, 3);
   const top = hits[0];
   const strongRead = !!top && top.score >= 0.75 && (hits[1]?.score ?? 0) < top.score - 0.15;
   if (p.status === 'matched' && p.via === 'image' && p.chosen !== null) {
@@ -411,9 +449,50 @@ export function applyOcr(p: PocketView, text: string, db: CardDB): PocketView {
   if (!top || top.score < 0.45) return { ...p, ocrText: text, nameCheck: 'unread' };
   // The text agrees with one of the image candidates, or is a clean read on its own.
   const agreesWithImage = p.matches.some((m) => db.nameOf[m.card] === top.name);
-  if (!agreesWithImage && !strongRead) return { ...p, ocrText: text, nameCheck: 'unread', readName: top.name };
+  if (!agreesWithImage && !strongRead) {
+    // A fair read (right 3 times in 4 on a real binder) beats an unsure picture match (right about half
+    // the time): it's shown first, still marked unsure, so the user confirms it.
+    if (top.score >= FAIR_READ) {
+      const guess = resolvePrinting(db, top.name, p.query, p.borderLuma).card;
+      return { ...p, ocrText: text, nameCheck: 'unread', readName: top.name, chosen: guess, finish: finishFor(db, guess, p.finish), via: 'text', status: 'uncertain', printingCheck: false, ties: undefined };
+    }
+    return { ...p, ocrText: text, nameCheck: 'unread', readName: top.name };
+  }
   const choice = resolvePrinting(db, top.name, p.query, p.borderLuma);
   return { ...p, ocrText: text, nameCheck: 'agrees', chosen: choice.card, status: 'matched', via: 'text', printingCheck: choice.ambiguous, ties: choice.ambiguous ? choice.ties.map((t) => t.card) : undefined };
+}
+
+/**
+ * The collector line is read for cards whose name has more than one printing (to tell them apart),
+ * and for cards the app isn't sure of (it can name the card outright).
+ */
+export function needsInfoOcr(p: PocketView, db: CardDB): boolean {
+  if (!p.infoCrop || p.via === 'manual' || p.cardBack || p.status === 'empty' || p.infoText !== undefined || p.chosen === null) return false;
+  return p.status !== 'matched' || db.printingsOf(db.nameOf[p.chosen]).length > 1;
+}
+
+/**
+ * Applies a read of the collector line (see parseCollectorLine). If it names a printing of the card,
+ * that's the printing, and page context leaves it alone. For a card the app wasn't sure of, a clean
+ * set code and number naming another card make that card the first guess (still to be checked): on
+ * real pages it was right 8 times in 10 there; on cards already identified, a misread digit can name
+ * another card, so there it only picks among the card's own printings.
+ */
+export function applyInfoRead(p: PocketView, text: string, db: CardDB): PocketView {
+  const base: PocketView = { ...p, infoText: text, infoCrop: undefined };
+  if (p.chosen === null || p.via === 'manual') return base;
+  const read = parseCollectorLine(text, (c) => db.hasSet(c));
+  const own = printingFromCollector(db, read, db.nameOf[p.chosen]);
+  if (own !== null) {
+    return { ...base, chosen: own, finish: finishFor(db, own, p.finish), printingRead: true, printingCheck: false, ties: undefined, pageSet: undefined };
+  }
+  if (p.status !== 'matched' && read.set && read.number !== undefined) {
+    const other = db.byCollector(read.set, read.number);
+    if (other !== null && (!db.allowed || db.allowed[other])) {
+      return { ...base, chosen: other, finish: finishFor(db, other, p.finish), via: 'text', status: 'uncertain', printingRead: true, printingCheck: false, ties: undefined, pageSet: undefined };
+    }
+  }
+  return base;
 }
 
 /** Every card's name is read once, as a cross-check (see applyOcr). */

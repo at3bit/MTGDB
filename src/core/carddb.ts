@@ -96,6 +96,9 @@ export function decodeFingerprints(buf: ArrayBuffer): { count: number; data: Uin
 }
 
 /** Lowercase, strip accents and punctuation, collapse spaces. */
+/** Sets left out of picture matching (see CardDB.matchable). */
+export const NOT_FOR_MATCHING = new Set(['slz', 'cmb1', 'cmb2', 'unk']);
+
 export function normalizeName(s: string): string {
   return s
     .normalize('NFKD')
@@ -104,6 +107,20 @@ export function normalizeName(s: string): string {
     .replace(/[^a-z0-9 ]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/**
+ * A title line read with OCR, without the junk at its ends: words of one or two characters, and words
+ * with digits (a name's short words, like "of" or "the", stay when they're in the middle).
+ */
+export function cleanTitleRead(text: string): string {
+  const words = normalizeName(text).split(' ').filter(Boolean);
+  const junk = (w: string) => w.length <= 2 || /\d/.test(w);
+  let a = 0, b = words.length;
+  while (a < b && junk(words[a])) a++;
+  while (b > a && junk(words[b - 1])) b--;
+  // Digits inside are junk too (a mana cost read in the middle of a long read).
+  return words.slice(a, b).filter((w) => !/\d/.test(w)).join(' ');
 }
 
 function trigrams(s: string): string[] {
@@ -219,6 +236,19 @@ export class CardDB {
   }
 
   /**
+   * Card names in a title line read with OCR. The read has junk at its ends (a stray letter from the
+   * frame, the mana cost read as "2% |", "222 ) |" or "L&E"), which drags the score of the right name
+   * down: those words are dropped before the read is matched (fuzzyNames). On a real binder's reads,
+   * "i Rise of the Dark Realms L&E" scored 0.74 for the right name, and 1.0 cleaned.
+   */
+  readName(text: string, limit = 5): { name: number; score: number }[] {
+    const clean = cleanTitleRead(text);
+    // A read cleaned down to a word or two of 3 letters ("PY Cat aa ee") says too little.
+    if (clean.replace(/ /g, '').length < 4) return [];
+    return this.fuzzyNames(clean, limit);
+  }
+
+  /**
    * Leave non-English printings out of matching and printing choices. Many share their art with an
    * English printing, so a photo of an English card could otherwise come back as the foreign one.
    */
@@ -230,6 +260,55 @@ export class CardDB {
     this.allowed = new Uint8Array(this.count);
     for (let i = 0; i < this.count; i++) this.allowed[i] = this.foreign[i] ? 0 : 1;
   }
+
+  private setSizes?: Map<string, number>;
+  /** How far a set's plain collector numbers run (older cards print it: "61/145"). */
+  setSize(set: string): number {
+    if (!this.setSizes) {
+      this.setSizes = new Map();
+      for (const r of this.file.cards) {
+        if (!/^\d+$/.test(r[3])) continue;
+        const n = Number(r[3]);
+        if (n > (this.setSizes.get(r[2]) ?? 0)) this.setSizes.set(r[2], n);
+      }
+    }
+    return this.setSizes.get(set) ?? 0;
+  }
+
+  private collectorIndex?: Map<string, number>;
+  /** The (English, when English only) card with this set code and collector number, or null. */
+  byCollector(set: string, number: number): number | null {
+    if (!this.collectorIndex) {
+      this.collectorIndex = new Map();
+      this.file.cards.forEach((r, i) => {
+        const key = `${r[2]}:${parseInt(r[3], 10)}`;
+        if (!this.foreign[i] && !this.collectorIndex!.has(key)) this.collectorIndex!.set(key, i);
+      });
+    }
+    return this.collectorIndex.get(`${set}:${number}`) ?? null;
+  }
+
+  /** Whether a set code is in the data. */
+  hasSet(code: string): boolean {
+    return code in this.file.sets;
+  }
+
+  /**
+   * Printings picture matching may return: the allowed ones (English only), less sets whose cards don't
+   * look like Magic cards and that a collection is unlikely to hold: The Zeta Set (a 2026 parody set
+   * whose "Power Sink" came back for a black card) and playtest cards. Search still finds them.
+   */
+  get matchable(): Uint8Array {
+    if (!this.matchableMask || this.matchableFor !== this.allowed) {
+      const mask = new Uint8Array(this.count);
+      for (let i = 0; i < this.count; i++) mask[i] = (!this.allowed || this.allowed[i]) && !NOT_FOR_MATCHING.has(this.file.cards[i][2]) ? 1 : 0;
+      this.matchableMask = mask;
+      this.matchableFor = this.allowed;
+    }
+    return this.matchableMask;
+  }
+  private matchableMask?: Uint8Array;
+  private matchableFor?: Uint8Array | null;
 
   /** Whether the card data knows colours and types (older data doesn't). */
   get hasCategories(): boolean {

@@ -51,10 +51,18 @@ describe('name cross-check', () => {
   it('leaves an unreadable name alone', () => {
     expect(applyOcr(pocket(0), '~~', db)).toMatchObject({ nameCheck: 'unread', status: 'matched', chosen: 0 });
   });
-  it('a weak read of an unidentified card is only a suggestion', () => {
-    const p = applyOcr(pocket(null, 'unknown'), 'Serra Angle xx', db);
-    expect(p.chosen).toBeNull();
-    expect(p.readName).toBe(db.nameOf[3]);
+  it('a fair read of an unidentified card is shown first but stays unsure; a weak one is only a suggestion', () => {
+    const fair = applyOcr(pocket(null, 'unknown'), 'Serra Arigel xx', db); // scores 0.72: fair, not clean
+    expect(fair).toMatchObject({ chosen: 3, status: 'uncertain', via: 'text', readName: db.nameOf[3] });
+    expect(nameUnsure(fair)).toBe(true);
+    const weak = applyOcr(pocket(null, 'unknown'), 'Sera Angl', db); // 0.64
+    expect(weak.chosen).toBeNull();
+    expect(weak.readName).toBe(db.nameOf[3]);
+  });
+  it('junk around a read name (a stray letter, the mana cost) is ignored', () => {
+    expect(applyOcr(pocket(null, 'unknown'), 'i Llanowar Elves      2% |', db)).toMatchObject({ chosen: 2, status: 'matched', via: 'text', nameCheck: 'agrees' });
+    // Too little left to go on.
+    expect(applyOcr(pocket(null, 'unknown'), 'PY  Cat  aa ee', db).chosen).toBeNull();
   });
   it('a clean read identifies an unidentified card', () => {
     expect(applyOcr(pocket(null, 'unknown'), 'Llanowar Elves', db)).toMatchObject({ chosen: 2, status: 'matched', via: 'text' });

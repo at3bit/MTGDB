@@ -19,6 +19,12 @@ export const REGION = {
   art: [0.08, 0.115, 0.92, 0.55] as const,
   /** Title line, used for OCR. Stops before most mana costs. */
   name: [0.065, 0.038, 0.84, 0.098] as const,
+  /**
+   * The bottom strip with the collector line: "079/249 U · MM2 • EN" on cards since 2015, and the
+   * copyright line ending in "61/145" (number / cards in the set) on older ones. Read with OCR, it tells
+   * look-alike printings apart.
+   */
+  info: [0.03, 0.925, 0.97, 0.99] as const,
 };
 
 const N = 32;

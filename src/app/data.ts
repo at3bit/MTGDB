@@ -167,7 +167,7 @@ export class Recognizer {
     // The worker died (out of memory, or a crash): fail what it held and start a new one.
     worker.addEventListener('error', (e) => this.restart(`the card reader crashed${e.message ? ` (${e.message})` : ''}`));
     const db = this.db;
-    const msg: WorkerRequest = { type: 'init', fps: db.fps.slice(), count: db.count, nameOf: db.nameOf.slice(), back: db.back?.slice(), allowed: db.allowed?.slice() ?? null, preferred: db.preferred?.slice() ?? null };
+    const msg: WorkerRequest = { type: 'init', fps: db.fps.slice(), count: db.count, nameOf: db.nameOf.slice(), back: db.back?.slice(), allowed: db.matchable.slice(), preferred: db.preferred?.slice() ?? null };
     worker.postMessage(msg);
   }
 
@@ -211,7 +211,7 @@ export class Recognizer {
 
   /** Follow the card database's allowed and preferred printings (after CardDB.setEnglishOnly / setCategories). */
   updateAllowed() {
-    const msg: WorkerRequest = { type: 'allowed', allowed: this.db.allowed?.slice() ?? null, preferred: this.db.preferred?.slice() ?? null };
+    const msg: WorkerRequest = { type: 'allowed', allowed: this.db.matchable.slice(), preferred: this.db.preferred?.slice() ?? null };
     this.worker.postMessage(msg);
   }
 

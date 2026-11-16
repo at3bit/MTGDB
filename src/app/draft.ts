@@ -9,6 +9,7 @@ import { photoUrl, type PocketView, type Spread } from './session.ts';
 const STATE = 'draft-v1';
 const PHOTO = 'draft-photo:';
 const NAME = 'draft-name:';
+const INFO = 'draft-info:';
 
 export interface DraftMeta {
   binder: string;
@@ -20,7 +21,7 @@ export interface DraftMeta {
   addToExisting?: boolean;
 }
 
-type DraftPocket = Omit<PocketView, 'thumbUrl' | 'photo' | 'nameCrop' | 'query'> & { query?: number[]; hasName?: boolean };
+type DraftPocket = Omit<PocketView, 'thumbUrl' | 'photo' | 'nameCrop' | 'infoCrop' | 'query'> & { query?: number[]; hasName?: boolean; hasInfo?: boolean };
 
 interface DraftState extends DraftMeta {
   v: 1;
@@ -55,11 +56,12 @@ async function write(meta: DraftMeta, spreads: Spread[]) {
     spreads: spreads.map((s) => ({
       ...s,
       pockets: s.pockets.map((p) => {
-        const { thumbUrl: _u, photo, nameCrop, query, ...rest } = p;
+        const { thumbUrl: _u, photo, nameCrop, infoCrop, query, ...rest } = p;
         const pid = p.pid ?? '';
         if (pid && photo && !written.has(PHOTO + pid)) blobs.push([PHOTO + pid, photo]);
         if (pid && nameCrop instanceof Blob && !written.has(NAME + pid)) blobs.push([NAME + pid, nameCrop]);
-        return { ...rest, query: query ? Array.from(query) : undefined, hasName: nameCrop instanceof Blob };
+        if (pid && infoCrop && !written.has(INFO + pid)) blobs.push([INFO + pid, infoCrop]);
+        return { ...rest, query: query ? Array.from(query) : undefined, hasName: nameCrop instanceof Blob, hasInfo: !!infoCrop };
       }),
     })),
   };
@@ -86,16 +88,19 @@ export async function loadDraft(): Promise<{ meta: DraftMeta; spreads: Spread[] 
   const pockets = d.spreads.flatMap((s) => s.pockets);
   const photos = await getMany(pockets.map((p) => PHOTO + (p.pid ?? '')));
   const names = await getMany(pockets.map((p) => (p.hasName ? NAME + (p.pid ?? '') : '')));
+  const infos = await getMany(pockets.map((p) => (p.hasInfo ? INFO + (p.pid ?? '') : '')));
   let k = 0;
   const spreads: Spread[] = d.spreads.map((s) => ({
     ...s,
-    pockets: s.pockets.map(({ hasName: _h, query, ...p }) => {
+    pockets: s.pockets.map(({ hasName: _h, hasInfo: _i, query, ...p }) => {
       const photo = photos[k] as Blob | undefined;
       const name = names[k] as Blob | undefined;
+      const info = infos[k] as Blob | undefined;
       k++;
       if (photo) written.add(PHOTO + p.pid);
       if (name) written.add(NAME + p.pid);
-      return { ...p, query: query ? Uint32Array.from(query) : undefined, photo, thumbUrl: photo ? photoUrl(photo) : '', nameCrop: name };
+      if (info) written.add(INFO + p.pid);
+      return { ...p, query: query ? Uint32Array.from(query) : undefined, photo, thumbUrl: photo ? photoUrl(photo) : '', nameCrop: name, infoCrop: info };
     }),
   }));
   const { binder, pagesPerSpread, runStats, options, addToExisting } = d;
@@ -106,7 +111,7 @@ export async function loadDraft(): Promise<{ meta: DraftMeta; spreads: Spread[] 
 export function clearDraft(): Promise<void> {
   saving = saving.then(async () => {
     written.clear();
-    const all = (await keys()).filter((k) => typeof k === 'string' && (k === STATE || k.startsWith(PHOTO) || k.startsWith(NAME)));
+    const all = (await keys()).filter((k) => typeof k === 'string' && (k === STATE || k.startsWith(PHOTO) || k.startsWith(NAME) || k.startsWith(INFO)));
     if (all.length) await delMany(all);
   });
   return saving;

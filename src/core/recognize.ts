@@ -13,6 +13,8 @@ export const THUMB_H = 402;
 /** OCR crop of the title line. */
 export const NAME_W = 480;
 export const NAME_H = 52;
+export const INFO_W = 960;
+export const INFO_H = 92;
 
 export interface RecognizeConfig {
   /** Each pocket is cropped this fraction larger on every side, so a card that slid inside its sleeve is still in view. */
@@ -35,6 +37,8 @@ export interface RecognizeConfig {
   matchLowDetail: boolean;
   /** Cut the title-line crop (for reading the name) for every card, not only those the image match didn't settle. */
   nameCropAll?: boolean;
+  /** Also crop the collector line (REGION.info) of each identified card, for reading its printing. */
+  infoCrop?: boolean;
   /**
    * How many of the candidate placements build the shortlist against the whole index (the rest only re-rank
    * it); all of them by default. With only the 2 likeliest, cards sitting a little off in their pocket (or an
@@ -76,6 +80,8 @@ export interface PocketResult {
   thumb: RGBAImage;
   /** Title-line crop for OCR (only for uncertain / unknown pockets). */
   nameCrop?: RGBAImage;
+  /** The collector line at the bottom of the card (see REGION.info), when asked for. */
+  infoCrop?: RGBAImage;
   /** Fingerprint of the best card placement, for re-ranking printings later (e.g. after OCR). */
   query?: Uint32Array;
   /** Mean brightness (0..255) of the card's printed border; tells black-bordered printings from white/gold ones. */
@@ -342,6 +348,7 @@ export function recognizePocket(pc: PocketCrop, idx: MatchIndex, cfg: RecognizeC
   let nameCrop: RGBAImage | undefined;
   if (status !== 'matched' || cfg.nameCropAll) nameCrop = warpQuad(pc.frame, mapRect(H, regionOf(REGION.name)), NAME_W, NAME_H);
   const symbolCrop = status !== 'unknown' ? warpQuad(pc.frame, mapRect(H, regionOf(SYMBOL_REGION)), SYMBOL_W, SYMBOL_H) : undefined;
+  const infoCrop = cfg.infoCrop && status !== 'unknown' ? warpQuad(pc.frame, mapRect(H, regionOf(REGION.info)), INFO_W, INFO_H) : undefined;
   return {
     page: pc.page,
     slot: pc.slot,
@@ -354,6 +361,7 @@ export function recognizePocket(pc: PocketCrop, idx: MatchIndex, cfg: RecognizeC
     glare: pc.glare,
     thumb: thumbOf(bestWindow),
     nameCrop,
+    infoCrop,
     symbolCrop,
     contrast: meanStd(grayRect(pc.gray, bestWindow, 48, 67)).std,
     query: fps[bestK],

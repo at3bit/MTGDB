@@ -27,7 +27,7 @@ class FakeWorker extends EventTarget {
   }
 }
 
-const db = { fps: new Uint32Array(5), count: 1, nameOf: new Int32Array(1) } as unknown as CardDB;
+const db = { fps: new Uint32Array(5), count: 1, nameOf: new Int32Array(1), matchable: new Uint8Array([1]) } as unknown as CardDB;
 const cal = { pages: [], rows: 3, cols: 3 } as unknown as Calibration;
 const frame = () => ({ width: 1, height: 1, buffer: new ArrayBuffer(4) });
 const answer = (job: number) => ({ type: 'spread', job, pockets: [], ms: 1, calibration: cal, retried: [] });

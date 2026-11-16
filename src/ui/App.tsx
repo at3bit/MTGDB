@@ -5,7 +5,7 @@ import { clearDraft, draftSummary, loadDraft, saveDraft, type DraftMeta, type Dr
 import type { CardDB } from '../core/carddb.ts';
 import { loadBaselines, loadCardDB, MissingDataError, Recognizer } from '../app/data.ts';
 import type { Baselines } from '../core/baselines.ts';
-import { addReading, applyOcr, binderEntries, preferPageSets, DEFAULT_SESSION, markGhosts, needsOcr, releasePhotos, toPocketView, type SessionConfig, type LivePrices, type PocketView, type Spread } from '../app/session.ts';
+import { addReading, applyInfoRead, applyOcr, binderEntries, needsInfoOcr, preferPageSets, DEFAULT_SESSION, markGhosts, needsOcr, releasePhotos, toPocketView, type SessionConfig, type LivePrices, type PocketView, type Spread } from '../app/session.ts';
 import { loadCollection, loadHistory, loadLivePrices, recordPrices, saveCollection, saveLivePrices, type Collection, type OwnedCard, type PriceHistory } from '../app/store.ts';
 import { fetchLivePrices } from '../app/prices.ts';
 import type { WirePocket } from '../app/protocol.ts';
@@ -148,25 +148,36 @@ export function App() {
   }, []);
 
   const runOcr = useCallback(
-    (key: number, crop: NonNullable<PocketView['nameCrop']>) => {
+    (key: number, crop?: NonNullable<PocketView['nameCrop']>) => {
       if (!db) return;
       setOcrPending((n) => n + 1);
+      const find = () => spreadsRef.current.flatMap((s) => s.pockets).find((p) => (p as KeyedPocket).key === key);
+      const update = (fn: (p: PocketView) => PocketView) =>
+        commitSpreads(
+          spreadsRef.current.map((s) =>
+            s.pockets.some((p) => (p as KeyedPocket).key === key)
+              ? preferPageSets({ ...s, pockets: s.pockets.map((p) => ((p as KeyedPocket).key === key && p.via !== 'manual' ? { ...fn(p), key } : p)) }, db)
+              : s,
+          ),
+        );
       const job = async () => {
-        // The pocket may be gone (its photo was read again after Pause & adjust).
-        if (!spreadsRef.current.some((s) => s.pockets.some((p) => (p as KeyedPocket).key === key))) {
-          setOcrPending((n) => n - 1);
-          return;
-        }
         try {
-          const { readCardName } = await import('../app/ocr.ts');
-          const { text } = await readCardName(crop);
-          commitSpreads(
-            spreadsRef.current.map((s) =>
-              s.pockets.some((p) => (p as KeyedPocket).key === key)
-                ? preferPageSets({ ...s, pockets: s.pockets.map((p) => ((p as KeyedPocket).key === key && p.via !== 'manual' ? { ...applyOcr(p, text, db), key } : p)) }, db)
-                : s,
-            ),
-          );
+          // The pocket may be gone (its photo was read again after Pause & adjust).
+          const p = find();
+          if (!p) return;
+          const ocr = await import('../app/ocr.ts');
+          // The printed name (asked for again with `crop`, from the card check).
+          const nameCrop = crop ?? (needsOcr(p) ? p.nameCrop : undefined);
+          if (nameCrop) {
+            const { text } = await ocr.readCardName(nameCrop);
+            update((q) => applyOcr(q, text, db));
+          }
+          // Then the collector line, to tell printings apart.
+          const q = find();
+          if (q && needsInfoOcr(q, db)) {
+            const text = await ocr.readCollectorLine(q.infoCrop!);
+            update((r) => applyInfoRead(r, text, db));
+          }
         } catch (e) {
           console.warn('OCR failed', e);
         } finally {
@@ -198,7 +209,7 @@ export function App() {
       if (redo >= 0) {
         const replaced = prev.map((s, i) => (i === redo ? preferPageSets({ ...s, pockets }, db) : s));
         commitSpreads(markGhosts(replaced, pps, db, sessionCfg.current));
-        for (const p of pockets) if (needsOcr(p) && !p.cardBack) runOcr(p.key, p.nameCrop!);
+        for (const p of pockets) if ((needsOcr(p) || needsInfoOcr(p, db)) && !p.cardBack) runOcr(p.key);
         autosave(1500);
         return;
       }
@@ -207,7 +218,7 @@ export function App() {
       if (!repeat && r.photo !== undefined) next = next.map((s, i) => (i === next.length - 1 ? { ...s, photo: r.photo } : s));
       setRunStats((s) => ({ captures: s.captures + 1, repeats: s.repeats + (repeat ? 1 : 0), reread: s.reread + (r.retried?.length ?? 0) }));
       commitSpreads(next);
-      for (const p of pockets) if (needsOcr(p) && !p.cardBack) runOcr(p.key, p.nameCrop!);
+      for (const p of pockets) if ((needsOcr(p) || needsInfoOcr(p, db)) && !p.cardBack) runOcr(p.key);
       autosave(1500);
     },
     [db, runOcr],
@@ -244,7 +255,7 @@ export function App() {
     setPagesPerSpread(meta.pagesPerSpread);
     setRunStats(meta.runStats);
     setDraft(null);
-    for (const s of spreads) for (const p of s.pockets) if (needsOcr(p) && !p.cardBack) runOcr((p as KeyedPocket).key, p.nameCrop!);
+    for (const s of spreads) for (const p of s.pockets) if ((needsOcr(p) || needsInfoOcr(p, db)) && !p.cardBack) runOcr((p as KeyedPocket).key);
     setScreen({ name: 'review', binder: meta.binder, fresh: true });
   };
 

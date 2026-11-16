@@ -41,6 +41,8 @@ interface Props {
   onReadName?: () => void;
 }
 
+const TIPS_KEY = 'mtgdb-hide-printing-tips';
+
 export function CardCheck({ db, live, pocket, location, position, onSave, onBack, onClose, onReadName }: Props) {
   const [query, setQuery] = useState('');
   /** A name picked from the search: swipe through its printings instead. */
@@ -116,13 +118,43 @@ export function CardCheck({ db, live, pocket, location, position, onSave, onBack
           ? 'The app isn’t sure of this card. It isn’t saved until you check it.'
           : pocket.status === 'unknown'
           ? 'Not identified. Swipe through the closest matches or search for the name.'
-          : pocket.printingCheck
-            ? 'Several printings look alike but are priced differently: compare the set symbol and border, and swipe to the right one.'
-            : pocket.seeThrough
-              ? 'Hazier than the other cards on its page, as if behind an empty sleeve. If the sleeve is empty, mark it empty.'
-              : pocket.pageSet && pocket.via !== 'manual' && current
-                ? `${current.setName} printing, like the other cards on this page (identical-looking printings exist). Swipe if yours is another.`
-                : null;
+          : pocket.seeThrough
+            ? 'Hazier than the other cards on its page, as if behind an empty sleeve. If the sleeve is empty, mark it empty.'
+            : null;
+  // Tips about printings come as a toast the user can turn off (collectors know reprints exist).
+  const printingTip = note
+    ? null
+    : pocket.printingCheck
+      ? 'Several printings look alike but are priced differently: compare the set symbol and border, and swipe to the right one.'
+      : pocket.pageSet && pocket.via !== 'manual' && current
+        ? `${current.setName} printing, like the other cards on this page. Swipe if yours is another.`
+        : null;
+  const [tipsOff, setTipsOff] = useState(() => {
+    try {
+      return localStorage.getItem(TIPS_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [toast, setToast] = useState<string | null>(null);
+  useEffect(() => {
+    if (tipsOff || !printingTip) {
+      setToast(null);
+      return;
+    }
+    setToast(printingTip);
+    const t = setTimeout(() => setToast(null), 5000);
+    return () => clearTimeout(t);
+  }, [pocket.page, pocket.slot, location, printingTip, tipsOff]);
+  const tipsNever = () => {
+    setTipsOff(true);
+    setToast(null);
+    try {
+      localStorage.setItem(TIPS_KEY, '1');
+    } catch {
+      /* private mode */
+    }
+  };
   const row = (label: string, a: string, b: string) => (
     <tr className={a !== b ? 'differs' : ''}>
       <th>{label}</th>
@@ -135,6 +167,13 @@ export function CardCheck({ db, live, pocket, location, position, onSave, onBack
 
   return (
     <div className="check" role="dialog" aria-label="Check card">
+      {toast && (
+        <div className="toast" role="status">
+          <span className="grow">{toast}</span>
+          <button className="linkish small" onClick={tipsNever}>Don’t show again</button>
+          <button className="toast-close" aria-label="Close tip" onClick={() => setToast(null)}>×</button>
+        </div>
+      )}
       <div className="topbar">
         <button className="back" onClick={onClose}>‹ Pages</button>
         <h1 className="ellipsis">{position ? `Card ${position.index} of ${position.total}` : 'Check card'}</h1>

@@ -34,6 +34,8 @@ export interface WirePocket {
   nameCrop?: WireImage;
   /** The title-line crop as a JPEG (when the worker could encode one; then nameCrop is left out). */
   nameJpeg?: Blob;
+  /** The collector line at the bottom of the card, as a JPEG, for telling look-alike printings apart. */
+  infoJpeg?: Blob;
   query?: number[];
   borderLuma?: number;
   cardBack?: boolean;

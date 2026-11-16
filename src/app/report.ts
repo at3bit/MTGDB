@@ -98,6 +98,8 @@ export function buildReport(
           nameCheck: p.nameCheck,
           readName: p.readName !== undefined ? db.names[p.readName] : undefined,
           ocrText: p.ocrText,
+          infoText: p.infoText,
+          printingRead: p.printingRead,
           otherNameDistance: p.otherNameDistance,
           sharpness: p.sharpness,
           contrast: p.contrast,
@@ -114,7 +116,18 @@ export async function saveReport(collection: string, scan: ReportScan, photos: [
   const old = (await get(KEY + collection)) as ReportFile | undefined;
   if (replace && old) await deleteReport(collection);
   const file: ReportFile = { v: 1, collection, scans: [...(replace ? [] : (old?.scans ?? [])), scan] };
-  if (photos.length) await setMany(photos.map(([pid, b]) => [PHOTO + pid, b]));
+  // Copies of the photos' bytes: a photo of a resumed scan is read back from the autosave, and Safari
+  // keeps such a blob tied to the autosave's file, which is deleted once the collection is saved
+  // ("The object can not be found here" when the report was shared).
+  const copies: [string, Blob][] = [];
+  for (const [pid, b] of photos) {
+    try {
+      copies.push([PHOTO + pid, new Blob([await b.arrayBuffer()], { type: b.type || 'image/jpeg' })]);
+    } catch {
+      /* a photo that can't be read is left out */
+    }
+  }
+  if (copies.length) await setMany(copies);
   await set(KEY + collection, file);
 }
 
@@ -141,13 +154,22 @@ export async function exportReport(collection: string): Promise<File | null> {
   const f = (await get(KEY + collection)) as ReportFile | undefined;
   if (!f) return null;
   const pids = f.scans.flatMap((s) => s.cards.map((c) => c.photo?.slice(6, -4)).filter((p): p is string => !!p));
-  const blobs = await getMany(pids.map((p) => PHOTO + p));
+  const keys = pids.map((p) => PHOTO + p);
+  // One unreadable record can fail a batch read: then read them one by one.
+  const blobs = await getMany(keys).catch(() => Promise.all(keys.map((k) => get(k).catch(() => undefined))));
   const files: Record<string, Uint8Array | [Uint8Array, { level: 0 }]> = {};
+  let missing = 0;
   for (let i = 0; i < pids.length; i++) {
     const b = blobs[i] as Blob | undefined;
-    if (b) files[`cards/${pids[i]}.jpg`] = [new Uint8Array(await b.arrayBuffer()), { level: 0 }];
+    try {
+      if (b) files[`cards/${pids[i]}.jpg`] = [new Uint8Array(await b.arrayBuffer()), { level: 0 }];
+      else missing++;
+    } catch {
+      // A photo saved before reports kept their own copies may be gone: the readings still go out.
+      missing++;
+    }
   }
-  files['report.json'] = strToU8(JSON.stringify(f, null, 1));
+  files['report.json'] = strToU8(JSON.stringify({ ...f, missingPhotos: missing }, null, 1));
   const zip = zipSync(files);
   const safe = collection.replace(/[^\w-]+/g, '_');
   return new File([zip.buffer as ArrayBuffer], `mtgdb-report-${safe}.zip`, { type: 'application/zip' });

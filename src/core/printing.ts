@@ -124,30 +124,106 @@ export function resolvePrinting(db: CardDB, nameIdx: number, query?: Uint32Array
   return { card: best.card, ambiguous, ties, ranked };
 }
 
-/** Printings whose reference fingerprints are this close look the same in a photo. */
-export const LOOKALIKE_BITS = 8;
+/**
+ * Printings whose reference fingerprints are this close can look the same in a photo. Reprints differ
+ * from the original in small ways (the border, the copyright line, the set symbol): in a real binder the
+ * app's wrong printings were 2.5-24 bits from the right one, most of them 7.5-12.5, closer than photo
+ * noise can tell apart.
+ */
+export const LOOKALIKE_BITS = 14;
+/** A page's set may pick a printing that fits the photo up to this much worse than the best fit (on a real binder's 206 cards: 4 -> 163 printings right, 8 -> 165, 12 -> 167). */
+export const PAGE_SLACK = 8;
+
+const refOf = (db: CardDB, c: number) => db.fps.subarray(c * FP_WORDS, (c + 1) * FP_WORDS);
+
+/** The sets a card could be from, judging by the look of its printing: its own, and those of look-alikes. */
+export function lookalikeSets(db: CardDB, card: number): Set<string> {
+  const info = db.info(card);
+  const out = new Set([info.set, originSet(info)]);
+  const ref = refOf(db, card);
+  for (const c of db.printingsOf(db.nameOf[card])) {
+    if (c !== card && fpDistance(ref, db.fps, c) <= LOOKALIKE_BITS) out.add(originSet(db.info(c)));
+  }
+  return out;
+}
 
 /**
- * Binders are usually sorted by set, so the other cards on a page say which of several identical-looking
- * printings a card is. `pageSets` counts the (origin) sets of the other cards identified on the page; if
- * one set clearly leads and the card has a look-alike printing in it, that printing is returned.
+ * The printing of `card`'s name from `set` that looks like it and fits the photo (`query`) nearly as well
+ * (within PAGE_SLACK), or null. Exact twins (List reprints, foil-only ★ printings) give way as usual.
  */
-export function pageSetChoice(db: CardDB, card: number, pageSets: Map<string, number>, query?: Uint32Array): number | null {
-  let top: string | null = null, n = 0, others = 0;
-  for (const [set, k] of pageSets) {
-    others += k;
-    if (k > n) [top, n] = [set, k];
-  }
-  // At least 2 of the other cards, and at least 40% of them, are from that set.
-  if (!top || n < 2 || n < 0.4 * others) return null;
-  const info = db.info(card);
-  if (info.set === top) return null;
-  const ref = db.fps.subarray(card * FP_WORDS, (card + 1) * FP_WORDS);
-  let pick: number | null = null, pickD = Infinity;
+export function printingInSet(db: CardDB, card: number, set: string, query?: Uint32Array, cfg: PrintingConfig = DEFAULT_PRINTING): number | null {
+  const ref = refOf(db, card);
+  const base = query ? fpDistance(query, db.fps, card) : 0;
+  let pick: number | null = null, pickScore = Infinity;
   for (const c of db.printingsOf(db.nameOf[card])) {
-    if (c === card || db.info(c).set !== top || fpDistance(ref, db.fps, c) > LOOKALIKE_BITS) continue;
+    const info = db.info(c);
+    if (originSet(info) !== set || (c !== card && fpDistance(ref, db.fps, c) > LOOKALIKE_BITS)) continue;
     const d = query ? fpDistance(query, db.fps, c) : 0;
-    if (d < pickD) [pick, pickD] = [c, d];
+    if (d > base + PAGE_SLACK) continue;
+    const score = d + (isTwin(info) ? cfg.twinPenalty : info.priority * cfg.priorityStep);
+    if (score < pickScore) [pick, pickScore] = [c, score];
   }
   return pick;
+}
+
+/** What a card's collector line says: set code, collector number, and (older cards) cards in the set. */
+export interface CollectorRead {
+  set?: string;
+  number?: number;
+  total?: number;
+}
+
+const digitsOf = (s: string) => Number(s.replace(/[OoQD]/g, '0').replace(/[Il|]/g, '1'));
+
+/**
+ * Parses an OCR read of a card's bottom strip. Since 2015 cards print "079/249 U" over "MM2 • EN" (the
+ * bullet reads as », «, *, + or =), since 2023 "M 0169" over "DFT • EN"; older cards end the copyright
+ * line with "61/145" (collector number / cards in the set).
+ */
+export function parseCollectorLine(text: string, knownSets?: (code: string) => boolean): CollectorRead {
+  const out: CollectorRead = {};
+  const slash = /(?<![0-9A-Za-z])([0-9OQD]{1,4})\s*\/\s*([0-9OQDIl|]{2,4})(?![0-9])/.exec(text);
+  if (slash) {
+    out.number = digitsOf(slash[1]);
+    out.total = digitsOf(slash[2]);
+  } else {
+    const plain = /(?<![0-9A-Za-z])[CURMLSPT]\s+([0-9OQ]{3,4})(?![0-9])/.exec(text);
+    if (plain) out.number = digitsOf(plain[1]);
+  }
+  for (const m of text.matchAll(/(?<![A-Za-z0-9])([A-Z0-9]{3,5})\s*[»«*+•·.=,:;]?\s*E[NM](?![A-Za-z])/g)) {
+    const code = m[1].toLowerCase();
+    if (!knownSets || knownSets(code)) {
+      out.set = code;
+      break;
+    }
+  }
+  return out;
+}
+
+/**
+ * The printing of a card name that its collector line names: by set code (and number), or for older
+ * cards by collector number (and the set's size). Null when the read doesn't single one out.
+ */
+export function printingFromCollector(db: CardDB, read: CollectorRead, nameIdx: number): number | null {
+  const printings = db.printingsOf(nameIdx);
+  const num = (c: number) => parseInt(db.info(c).cn, 10);
+  if (read.set) {
+    const inSet = printings.filter((c) => db.info(c).set === read.set);
+    const exact = read.number !== undefined ? inSet.filter((c) => num(c) === read.number) : [];
+    if (exact.length === 1) return exact[0];
+    // The set alone: its regular printing (a set can hold a showcase or ★ copy too).
+    const regular = inSet.filter((c) => !isTwin(db.info(c)) && db.info(c).priority === 0);
+    if (regular.length === 1) return regular[0];
+    if (inSet.length === 1) return inSet[0];
+  }
+  if (read.number !== undefined && !read.set) {
+    const same = printings.filter((c) => num(c) === read.number && !isTwin(db.info(c)));
+    if (same.length === 1) return same[0];
+    if (same.length > 1 && read.total) {
+      // Older cards print the set's size: the set whose numbers run up to it.
+      const fits = same.filter((c) => Math.abs(db.setSize(db.info(c).set) - read.total!) <= 1);
+      if (fits.length === 1) return fits[0];
+    }
+  }
+  return null;
 }

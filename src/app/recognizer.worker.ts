@@ -29,6 +29,9 @@ async function jpeg(img: { width: number; height: number; data: Uint8ClampedArra
   }
 }
 
+/** Crops can be sent as JPEG files (the collector line is only cropped then). */
+const canEncode = typeof OffscreenCanvas !== 'undefined';
+
 /** Whether frames can come as ImageBitmaps: reading their pixels here keeps that work off the page's thread. */
 const canReadBitmaps = (() => {
   try {
@@ -76,7 +79,7 @@ async function handle(ev: MessageEvent<WorkerRequest>) {
       const same = tracking?.runId === msg.runId ? tracking : null;
       const prev = same?.calibration;
       // Every card's title line comes back, so its name can be read as a cross-check of the image match.
-      const tracked = recognizeTrackedSpread(frames, msg.calibration, prev, index, { ...DEFAULT_RECOGNIZE, nameCropAll: true }, { ...DEFAULT_TRACK, turns: same?.turns });
+      const tracked = recognizeTrackedSpread(frames, msg.calibration, prev, index, { ...DEFAULT_RECOGNIZE, nameCropAll: true, infoCrop: canEncode }, { ...DEFAULT_TRACK, turns: same?.turns });
       if (msg.tentative && isJunkReading(tracked.pockets)) {
         // Caught the page mid-turn: keep tracking from the last good spread.
         post({ type: 'spread', job: msg.job, pockets: [], ms: performance.now() - t0, calibration: tracked.calibration, retried: [], discarded: true });
@@ -87,6 +90,8 @@ async function handle(ev: MessageEvent<WorkerRequest>) {
       const thumbs = await Promise.all(results.map((r) => jpeg(r.thumb)));
       // Name crops as small JPEGs too (~10 KB instead of 100 KB of pixels each, for every card of a big binder).
       const names = await Promise.all(results.map((r) => (r.nameCrop ? jpeg(r.nameCrop, 0.92) : null)));
+      // The collector line, to tell look-alike printings apart (sent only as a JPEG).
+      const infos = await Promise.all(results.map((r) => (r.infoCrop ? jpeg(r.infoCrop, 0.9) : null)));
       const transfer: Transferable[] = [];
       const pockets: WirePocket[] = results.map((r, i) => {
         const thumbJpeg = thumbs[i] ?? undefined;
@@ -106,6 +111,7 @@ async function handle(ev: MessageEvent<WorkerRequest>) {
           thumbJpeg,
           nameCrop: r.nameCrop && !nameJpeg ? { width: r.nameCrop.width, height: r.nameCrop.height, buffer: r.nameCrop.data.buffer as ArrayBuffer } : undefined,
           nameJpeg,
+          infoJpeg: infos[i] ?? undefined,
           query: r.query ? Array.from(r.query) : undefined,
           borderLuma: r.borderLuma,
           cardBack: r.cardBack,

@@ -86,6 +86,26 @@ link. Each person's collection is stored only on their own phone.
    names at 1080p and ~80% even in 12 MP photos, so it checks the image match
    rather than replacing it; whenever the two agreed in testing, they were
    right.)
+   The read is cleaned before matching: stray letters, digits and symbols at
+   its ends (a cut-off first letter, the mana cost read as "2% |" or "L&E") are
+   dropped, and a read cleaned down to fewer than 4 letters says nothing. On a
+   real binder's 179 reads, clean reads that identify a card went from 59 to
+   76, none wrong, and every read scoring 0.75+ (80 of them) was right. For a
+   card the picture didn't settle, a fair read (0.65+, right 3 times in 4)
+   becomes the first guess, still marked to check: the picture's unsure guess
+   was right only 19 times in 34.
+   **Collector line.** Each identified card's bottom strip is also cropped and
+   read, for cards whose name has more than one printing and cards the app is
+   unsure of: since 2015 cards print the number and set ("079/249 U" over
+   "MM2 • EN"), older ones end the copyright line with number / cards in the
+   set ("61/145"). That names the printing outright, where the picture can't
+   (`parseCollectorLine`, `printingFromCollector`); page context then leaves
+   it alone and it anchors the page's set. On 30 real page photos at half the
+   app's resolution it named the printing of 95 of 227 cards; for cards the
+   app was unsure of, a set code and number naming another card were right 8
+   times in 10, so there it becomes the first guess (on cards already
+   identified a misread digit can name another card, so it only picks among
+   the card's own printings).
 6. **Printing.** Once the name is known, the app picks the printing from
    the closest look-alikes (`src/core/printing.ts`). It reads the printed
    border colour from the photo and checks it against Scryfall's
@@ -111,12 +131,19 @@ link. Each person's collection is stored only on their own phone.
      regular printing unless the photo is clearly closer to them (5 bits).
      Look-alikes far apart in price are still flagged **Which printing?**,
      whatever the preference.
-   - **The page's set.** Among printings that look the same (fingerprints
-     within 8 bits), a card takes the one from the set most other cards on
-     its page come from (at least 2 of them, and 40%), so a Legions page reads
-     Legions, not Time Spiral Timeshifted or List copies. Cards you picked in
-     the check count towards the page's set and are never changed; the check
-     says when a printing was chosen this way.
+   - **The page's set.** A page's set is the one the most cards on it could
+     be from, judging by the look of their printings (look-alikes within 14
+     bits: reprints differ from the original in the border, copyright line
+     and set symbol, most by 7.5-12.5 bits, closer than photo noise can tell
+     apart); counting the app's own picks failed when they scattered over
+     reprints (a page of Magic 2010 cards read as 10th Edition, Duel Deck and
+     Fifth Dawn reprints). If a set covers at least 2 of the other cards and
+     40%, each card takes its look-alike from that set, if it fits the photo
+     within 8 bits of the best fit, never a List or ★ twin over the regular
+     card. Cards you picked, and printings read off the collector line, count
+     with their own set and are never changed. Replayed on a real binder's 206
+     correctly named cards (their photos from the scan report), the printing
+     came out right for 154 with the old rule and 165 now.
    Replaying that scan's checked list through the new rules changes exactly
    those 10 cards and none of the other 195; on the random-printing
    evaluation (`npm run eval`) exact printings went from 75.0% / 67.6% /
@@ -214,13 +241,25 @@ link. Each person's collection is stored only on their own phone.
   after its pages (printings it already has aren't added twice), so a big
   binder can be scanned in several sittings. To start a collection over,
   delete it and create it again.
+- **Unsure guesses**: when the app isn't sure of a card and its closest match
+  isn't one of the collection's colours, the closest one that is comes first
+  (a green Ooze was offered for Grim Return, a Plains for Stitch Together).
+  A confident off-colour match, a misfiled card, stays. The Zeta Set (a
+  parody set) and playtest cards are left out of picture matching; search
+  still finds them.
+- **Printing tips** ("several printings look alike…", "…like the other cards
+  on this page") show as a toast for a few seconds, with Don't show again.
 - **Scan report** (on each collection's page, **Share scan report**): for
   every card scanned into the collection, what the app read (its 5 closest
   matches and how close, the name it read, its flags) next to what was saved
   after the card check, whether you changed it, and the card's photo, as a zip
   (report.json + cards/*.jpg, about 20-30 KB a card). Every card fixed in the
   check is a real mistake to learn from; it's kept on the phone until shared,
-  and deleted with the collection.
+  and deleted with the collection. The report keeps its own copies of the
+  photos (a resumed scan's photos come from the autosave, which Safari ties
+  to the autosave's file, deleted once the collection is saved: sharing then
+  failed with "The object can not be found here"); a photo that can't be read
+  is left out of the zip instead of failing it.
 - **Export CSV** (collection page, or All cards) opens the share sheet (Save
   to Files, Google Drive, …): name, set, collector number, finish, price,
   collection, page, slot and Scryfall ID of each card.
