@@ -473,10 +473,12 @@ export function needsInfoOcr(p: PocketView, db: CardDB): boolean {
 
 /**
  * Applies a read of the collector line (see parseCollectorLine). If it names a printing of the card,
- * that's the printing, and page context leaves it alone. For a card the app wasn't sure of, a clean
- * set code and number naming another card make that card the first guess (still to be checked): on
- * real pages it was right 8 times in 10 there; on cards already identified, a misread digit can name
- * another card, so there it only picks among the card's own printings.
+ * that's the printing, and page context leaves it alone. For a card the app wasn't sure of, a set code
+ * and number naming another card make that card the first guess (still to be checked) when something
+ * else backs it: the picture had it among its candidates, or the name read points to it. Otherwise it is
+ * offered among the options. (On real pages such reads were right 8 times in 9, but a misread number
+ * once replaced a right but unsure guess; on cards already identified a misread digit can name another
+ * card, so there the line only picks among the card's own printings.)
  */
 export function applyInfoRead(p: PocketView, text: string, db: CardDB): PocketView {
   const base: PocketView = { ...p, infoText: text, infoCrop: undefined };
@@ -489,7 +491,13 @@ export function applyInfoRead(p: PocketView, text: string, db: CardDB): PocketVi
   if (p.status !== 'matched' && read.set && read.number !== undefined) {
     const other = db.byCollector(read.set, read.number);
     if (other !== null && (!db.allowed || db.allowed[other])) {
-      return { ...base, chosen: other, finish: finishFor(db, other, p.finish), via: 'text', status: 'uncertain', printingRead: true, printingCheck: false, ties: undefined, pageSet: undefined };
+      const name = db.nameOf[other];
+      const backed =
+        p.matches.some((m) => db.nameOf[m.card] === name) ||
+        p.readName === name ||
+        (!!p.ocrText && db.readName(p.ocrText, 3).some((h) => h.name === name && h.score >= 0.45));
+      if (backed) return { ...base, chosen: other, finish: finishFor(db, other, p.finish), via: 'text', status: 'uncertain', printingRead: true, printingCheck: false, ties: undefined, pageSet: undefined };
+      if (p.readName === undefined) return { ...base, readName: name };
     }
   }
   return base;

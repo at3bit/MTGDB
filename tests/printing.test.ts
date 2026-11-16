@@ -122,7 +122,10 @@ describe('collector line', () => {
   it('names the card outright only for one the app was not sure of', () => {
     const unsure = { ...pocket(0, 14), status: 'uncertain' as const, infoCrop: new Blob() };
     expect(needsInfoOcr(unsure, db)).toBe(true);
-    expect(applyInfoRead(unsure, '075/264 U KLD + EN', db)).toMatchObject({ chosen: 16, status: 'uncertain', via: 'text' });
+    // Backed by the picture (among its candidates): the first guess. Not backed: offered as an option.
+    const backed = { ...unsure, matches: [{ card: 14, d: 32 }, { card: 16, d: 36 }] };
+    expect(applyInfoRead(backed, '075/264 U KLD + EN', db)).toMatchObject({ chosen: 16, status: 'uncertain', via: 'text' });
+    expect(applyInfoRead(unsure, '075/264 U KLD + EN', db)).toMatchObject({ chosen: 14, readName: db.nameOf[16] });
     // An identified card: a misread number naming another card changes nothing.
     expect(applyInfoRead({ ...pocket(0, 14), infoCrop: new Blob() }, '075/264 U KLD + EN', db).chosen).toBe(14);
     // A card with one printing that the app is sure of isn't read at all.

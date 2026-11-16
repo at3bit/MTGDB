@@ -101,11 +101,13 @@ link. Each person's collection is stored only on their own phone.
    set ("61/145"). That names the printing outright, where the picture can't
    (`parseCollectorLine`, `printingFromCollector`); page context then leaves
    it alone and it anchors the page's set. On 30 real page photos at half the
-   app's resolution it named the printing of 95 of 227 cards; for cards the
-   app was unsure of, a set code and number naming another card were right 8
-   times in 10, so there it becomes the first guess (on cards already
-   identified a misread digit can name another card, so it only picks among
-   the card's own printings).
+   app's resolution it named the printing of 95 of 227 cards. For a card the
+   app was unsure of, a set code and number naming another card (right 8
+   times in 9 there, but once a misread number replaced a right guess) make
+   it the first guess only when the picture had it among its candidates or
+   the name read points to it; otherwise it's offered among the options. On
+   cards already identified a misread digit can name another card, so there
+   it only picks among the card's own printings.
 6. **Printing.** Once the name is known, the app picks the printing from
    the closest look-alikes (`src/core/printing.ts`). It reads the printed
    border colour from the photo and checks it against Scryfall's
