@@ -10,8 +10,11 @@
 //
 // File format: see src/core/baselines.ts (version 2: latest, 30- and 90-day
 // averages and the price 30 days ago, per finish).
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { pipeline } from 'node:stream';
+import { pipeline as pipelineAsync } from 'node:stream/promises';
 import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
 import { createGunzip } from 'node:zlib';
@@ -24,12 +27,21 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const UA = 'MTGDB-binder-scanner/0.1 (personal collection tool)';
 const BASE = process.env.MTGJSON_BASE ?? 'https://mtgjson.com/api/v5';
 
+/**
+ * Downloads a gzipped file to disk, then streams it unzipped. Parsing the 150 MB price file as it
+ * arrived took long enough on Vercel that the server cut the transfer off; downloading first is quick.
+ * Errors travel down the pipeline (a broken download used to crash the script instead of being retried).
+ */
 async function gunzipStream(url: string) {
   const res = await fetch(url, { headers: { 'User-Agent': UA } });
   if (!res.ok || !res.body) throw new Error(`${url}: HTTP ${res.status}`);
-  const s = Readable.fromWeb(res.body as any).pipe(createGunzip());
-  s.setEncoding('utf8');
-  return s;
+  // In the temp folder, not the build cache (which Vercel uploads after every build).
+  const file = join(tmpdir(), `mtgdb-${url.split('/').pop()}`);
+  await pipelineAsync(Readable.fromWeb(res.body as any), createWriteStream(file));
+  const gz = createGunzip();
+  pipeline(createReadStream(file), gz, () => {});
+  gz.setEncoding('utf8');
+  return gz;
 }
 
 const cards = (JSON.parse(readFileSync(join(root, 'public/data/cards.json'), 'utf8')) as CardsFile).cards;
