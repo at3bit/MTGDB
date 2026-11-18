@@ -293,6 +293,24 @@ export function App() {
     if (db) setHistory(await recordPrices(db, next, live));
   };
 
+  /** How many copies of a saved card there are, changed on its detail screen (1–999). Taps can come
+   *  faster than React re-renders, so each one builds on the latest collection, not this render's. */
+  const latest = useRef(collection);
+  latest.current = collection;
+  const changeQuantity = (ref: CardRef, qty: number) => {
+    const n = Math.max(1, Math.min(999, Math.round(qty)));
+    const next: Collection = {
+      binders: latest.current.binders.map((b) =>
+        b.name !== ref.binder
+          ? b
+          : { ...b, cards: b.cards.map((c) => (c.id === ref.id && c.page === ref.page && c.slot === ref.slot ? (n === 1 ? (({ qty: _q, ...rest }) => rest)(c) : { ...c, qty: n }) : c)) },
+      ),
+    };
+    latest.current = next;
+    setCollection(next);
+    void saveCollection(next).catch((e) => alert(`Couldn’t save the quantity: ${(e as Error).message}`));
+  };
+
   const openCard = (r: OwnedRow) => setDetail({ binder: r.binder, page: r.page, slot: r.slot, id: r.id });
   const detailRow = detail && db ? ownedRows(db, collection, live, history, baselines, detail.binder).find((r) => r.id === detail.id && r.page === detail.page && r.slot === detail.slot) : undefined;
   const tab = screen.name === 'search' ? 'search' : screen.name === 'home' || screen.name === 'binder' ? 'collections' : null;
@@ -499,6 +517,7 @@ export function App() {
             setScreen({ name: 'binder', binder: b });
           }}
           onChangeFinish={(f) => changeFinish(detail, f)}
+          onChangeQuantity={(n) => changeQuantity(detail, n)}
         />
       )}
     </div>

@@ -1,5 +1,5 @@
 // The card detail screen: the art fills the screen behind the card, then its price,
-// price history, where it lives and its finish.
+// price history, where it lives, how many copies there are and its finish.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatUSD, type CardDB, type Finish } from '../core/carddb.ts';
 import { cardPrice, type LivePrices } from '../app/session.ts';
@@ -27,7 +27,11 @@ interface Props {
   onClose: () => void;
   onOpenCollection: (binder: string) => void;
   onChangeFinish: (finish: Finish) => void;
+  /** Copies of this card in this slot (1–999). */
+  onChangeQuantity: (qty: number) => void;
 }
+
+const MAX_QTY = 999;
 
 const day = (d: string) => new Date(`${d}T12:00:00`).toLocaleDateString([], { day: 'numeric', month: 'short' });
 
@@ -63,7 +67,7 @@ function PriceChart({ points }: { points: [string, number][] }) {
   );
 }
 
-export function CardDetail({ db, row, live, history, baselines, onClose, onOpenCollection, onChangeFinish }: Props) {
+export function CardDetail({ db, row, live, history, baselines, onClose, onOpenCollection, onChangeFinish, onChangeQuantity }: Props) {
   const info = db.info(row.card);
   const ref = useRef<HTMLDivElement>(null);
   const [range, setRange] = useState<RangeKey>('30D');
@@ -105,11 +109,16 @@ export function CardDetail({ db, row, live, history, baselines, onClose, onOpenC
         </div>
 
         <section className="price-block" aria-label="Price">
-          <p className="eyebrow">Market price{row.finish !== 'nonfoil' ? ` · ${FINISH_LABEL[row.finish]}` : ''}</p>
+          <p className="eyebrow">Market price{row.finish !== 'nonfoil' ? ` · ${FINISH_LABEL[row.finish]}` : ''}{row.qty > 1 ? ' · each' : ''}</p>
           <div className="price-row">
             <span className="money-l">{formatUSD(row.price)}</span>
             {row.trend?.gain30 != null && <PriceBadge change={row.trend.gain30} pct={row.trend.pct30} suffix="30 days" />}
           </div>
+          {row.qty > 1 && (
+            <p className="holding" data-testid="holding-value">
+              Your {row.qty} copies <span className="num">{row.price == null ? 'no price' : formatUSD(row.price * row.qty)}</span>
+            </p>
+          )}
           <div className="small muted">
             {others.map((o) => `${FINISH_LABEL[o.f]} ${formatUSD(o.price)}`).join(' · ')}
             {others.length > 0 && ' · '}
@@ -140,6 +149,14 @@ export function CardDetail({ db, row, live, history, baselines, onClose, onOpenC
           <div className="detail-row">
             <span className="label">Location</span>
             <span className="value">Page {row.page}, slot {row.slot}</span>
+          </div>
+          <div className="detail-row">
+            <span className="label" id="qty-label">Quantity</span>
+            <div className="stepper" role="group" aria-labelledby="qty-label">
+              <button aria-label="Decrease quantity" disabled={row.qty <= 1} onClick={() => onChangeQuantity(row.qty - 1)}>−</button>
+              <output aria-live="polite" aria-label={`${row.qty} ${row.qty === 1 ? 'copy' : 'copies'}`} data-testid="quantity">{row.qty}</output>
+              <button aria-label="Increase quantity" disabled={row.qty >= MAX_QTY} onClick={() => onChangeQuantity(row.qty + 1)}>+</button>
+            </div>
           </div>
           <div className="detail-row">
             <span className="label">Printing</span>

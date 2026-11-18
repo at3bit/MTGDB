@@ -1,6 +1,6 @@
 import { formatUSD, type CardDB } from '../core/carddb.ts';
 import { cardPrice, type LivePrices } from '../app/session.ts';
-import { trendFor, type Collection, type PriceHistory } from '../app/store.ts';
+import { copies, totals, trendFor, type Collection, type PriceHistory } from '../app/store.ts';
 import { scryfallArt } from '../app/prices.ts';
 import type { Baselines } from '../core/baselines.ts';
 import type { DraftSummary } from '../app/draft.ts';
@@ -39,7 +39,10 @@ export interface OwnedRow {
   name: string;
   set: string;
   finish: 'nonfoil' | 'foil' | 'etched';
+  /** Price of one copy. */
   price: number | null;
+  /** Copies held (see OwnedCard.qty). */
+  qty: number;
   trend: ReturnType<typeof trendFor>;
 }
 
@@ -52,13 +55,13 @@ export function ownedRows(db: CardDB, col: Collection, live: LivePrices, history
       if (idx < 0) continue;
       const info = db.info(idx);
       const price = cardPrice(db, idx, c.finish, live);
-      rows.push({ binder: b.name, page: c.page, slot: c.slot, card: idx, id: c.id, name: info.name, set: info.set, finish: c.finish, price, trend: trendFor(history, c.id, c.finish, price, baselines?.get(idx, c.finish)) });
+      rows.push({ binder: b.name, page: c.page, slot: c.slot, card: idx, id: c.id, name: info.name, set: info.set, finish: c.finish, price, qty: copies(c), trend: trendFor(history, c.id, c.finish, price, baselines?.get(idx, c.finish)) });
     }
   }
   return rows;
 }
 
-/** Quantities aren't tracked: one row per printing and finish across the collection (first place it's stored). */
+/** One row per printing and finish (the first place it's stored), for lists that name each card once. */
 export function uniqueRows(rows: OwnedRow[]): OwnedRow[] {
   const seen = new Set<string>();
   return rows.filter((r) => {
@@ -69,13 +72,13 @@ export function uniqueRows(rows: OwnedRow[]): OwnedRow[] {
   });
 }
 
-/** Total change over 30 days of the cards whose change is known: dollars and fraction. */
+/** Total change over 30 days of the cards whose change is known (each copy counts): dollars and fraction. */
 export function change30(rows: OwnedRow[]): { gain: number; pct: number } | null {
   let gain = 0, base = 0, n = 0;
   for (const r of rows) {
     if (r.price == null || r.trend?.gain30 == null) continue;
-    gain += r.trend.gain30;
-    base += r.price - r.trend.gain30;
+    gain += r.trend.gain30 * r.qty;
+    base += (r.price - r.trend.gain30) * r.qty;
     n++;
   }
   return n && base > 0 ? { gain, pct: gain / base } : null;
@@ -85,9 +88,10 @@ const plural = (n: number, w: string) => `${n.toLocaleString()} ${w}${n === 1 ? 
 
 export function HomeScreen({ db, dbStatus, collection, live, history, baselines, refreshing, onOpenBinder, onNewCollection, onOpenCard, onSeeAll, draft, onResume, onDiscardDraft, onRefresh }: Props) {
   const allRows = db ? ownedRows(db, collection, live, history, baselines) : [];
+  // The portfolio is every copy in every collection; the lists below name each printing once.
   const rows = uniqueRows(allRows);
-  const total = rows.reduce((t, r) => t + (r.price ?? 0), 0);
-  const change = change30(rows);
+  const { value: total, count } = totals(allRows);
+  const change = change30(allRows);
   const sell = rows
     .filter((r) => r.trend && r.trend.vsAvg >= SELL_SIGNAL && r.trend.avg * r.trend.vsAvg >= 1)
     .sort((a, b) => b.trend!.avg * b.trend!.vsAvg - a.trend!.avg * a.trend!.vsAvg)
@@ -125,7 +129,7 @@ export function HomeScreen({ db, dbStatus, collection, live, history, baselines,
         <div className="trend">
           {change && Math.abs(change.gain) >= 0.05 && <PriceBadge change={change.gain} pct={change.pct} suffix="30 days" />}
           <span className="small muted">
-            {plural(rows.length, 'card')}
+            {plural(count, 'card')}
             {pricesAsOf && ` · prices ${pricesAsOf.toLocaleDateString([], { day: 'numeric', month: 'short' })}`}
           </span>
           {rows.length > 0 && (
@@ -158,17 +162,17 @@ export function HomeScreen({ db, dbStatus, collection, live, history, baselines,
           <div className="tiles">
             {collection.binders.map((b) => {
               const mine = db ? allRows.filter((r) => r.binder === b.name) : [];
-              const value = mine.reduce((t, r) => t + (r.price ?? 0), 0);
+              const { value, count: held } = totals(mine);
               const best = mine.reduce<OwnedRow | null>((m, r) => ((r.price ?? 0) > (m?.price ?? -1) ? r : m), null);
               const mana = db ? collectionMana(db, b) : 'C';
               return (
-                <button key={b.name} className={`ctile mana-${mana}${LIGHT_TILES.includes(mana) ? ' light' : ''}`} onClick={() => onOpenBinder(b.name)} aria-label={`${b.name}: ${db ? formatUSD(value) : ''}, ${plural(b.cards.length, 'card')}`}>
+                <button key={b.name} className={`ctile mana-${mana}${LIGHT_TILES.includes(mana) ? ' light' : ''}`} onClick={() => onOpenBinder(b.name)} aria-label={`${b.name}: ${db ? formatUSD(value) : ''}, ${plural(db ? held : b.cards.length, 'card')}`}>
                   {best && <img className="art" src={scryfallArt(best.id)} alt="" loading="lazy" />}
                   <span className="shade" />
                   <span className="name">{b.name}</span>
                   <span>
                     <span className="value" style={{ display: 'block' }}>{db ? formatUSD(value) : ''}</span>
-                    <span className="count">{plural(b.cards.length, 'card')}</span>
+                    <span className="count">{plural(db ? held : b.cards.length, 'card')}</span>
                   </span>
                 </button>
               );
@@ -190,7 +194,7 @@ export function HomeScreen({ db, dbStatus, collection, live, history, baselines,
             At least {Math.round(SELL_SIGNAL * 100)}% (and $1) above their 30-day average{baselines ? ` on TCGplayer, as of ${baselines.asOf}` : ''}.
           </p>
           {sell.map((r) => (
-            <CardRow key={`${r.binder}-${r.page}-${r.slot}`} id={r.id} name={r.name} finish={r.finish} meta={`${r.binder} · page ${r.page}, slot ${r.slot} · avg ${formatUSD(r.trend!.avg)}`} price={r.price} trend={r.trend} onOpen={() => onOpenCard(r)} />
+            <CardRow key={`${r.binder}-${r.page}-${r.slot}`} id={r.id} name={r.name} finish={r.finish} meta={`${r.binder} · page ${r.page}, slot ${r.slot} · avg ${formatUSD(r.trend!.avg)}`} price={r.price} qty={r.qty} trend={r.trend} onOpen={() => onOpenCard(r)} />
           ))}
         </section>
       )}
@@ -202,7 +206,7 @@ export function HomeScreen({ db, dbStatus, collection, live, history, baselines,
             <button className="btn quiet small" onClick={onSeeAll} style={{ marginRight: -16 }}>See all</button>
           </div>
           {top.map((r) => (
-            <CardRow key={`${r.binder}-${r.page}-${r.slot}`} id={r.id} name={r.name} finish={r.finish} meta={`${r.binder} · page ${r.page}, slot ${r.slot}`} price={r.price} trend={r.trend} onOpen={() => onOpenCard(r)} />
+            <CardRow key={`${r.binder}-${r.page}-${r.slot}`} id={r.id} name={r.name} finish={r.finish} meta={`${r.binder} · page ${r.page}, slot ${r.slot}`} price={r.price} qty={r.qty} trend={r.trend} onOpen={() => onOpenCard(r)} />
           ))}
         </section>
       )}

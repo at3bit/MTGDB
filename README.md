@@ -119,7 +119,7 @@ link. Each person's collection is stored only on their own phone.
    sharp crop of your card's set symbol next to each printing's, so you can
    compare them by eye. Different printings of a card are kept as separate
    entries (they're worth different amounts); two copies of the same printing
-   are one entry. (Deciding by the symbol automatically was tested and
+   are one entry, whose quantity you set on its detail screen afterwards. (Deciding by the symbol automatically was tested and
    did no better than the default pick: the symbol is only ~20 px at 4K and
    many look-alikes have identical symbol areas. See `src/core/symbol.ts`.)
 
@@ -227,8 +227,13 @@ link. Each person's collection is stored only on their own phone.
 - If the video stops responding part-way (Safari now and then drops a seek;
   each is retried) or the card reader crashes (it restarts), the scan says so
   and keeps everything captured up to then, rather than freezing.
-- Quantities aren't tracked: a collection stores one entry per printing (and
-  finish), and the totals count each printing once.
+- **Quantities**: a scan stores one entry per printing (and finish), as one
+  copy. To record more copies, open the card and use the **Quantity** − / +
+  stepper (1–999). Every total counts each copy: a card's value is its price
+  × quantity in lists, tiles and the detail screen, and the collection and
+  portfolio totals and card counts add up the copies. The CSV export has
+  Quantity and Total USD columns. Adding a new scan to a collection keeps the
+  quantities already set.
 - **Delete a collection** from its ⋯ menu (Delete collection, then confirm).
 - **Autosave**: a scan in progress is saved on the phone (IndexedDB) as each
   photo is read, after every 5 Save + continue taps, when the scan finishes
@@ -293,7 +298,9 @@ visible focus ring; `npm run ux` re-measures this.
   Share scan report and Delete are in the ⋯ menu.
 - **Card detail** (tap any card): its art fills the screen behind it; price
   and 30-day change, the price history recorded on this phone, where it lives
-  (collection, page and slot, printing) and its finish, which can be changed.
+  (collection, page and slot, printing), its quantity and its finish, both of
+  which can be changed. With more than one copy, it also shows what your
+  copies are worth together.
 - **Scan review**: Back keeps the scan as a draft to resume from the home
   screen; Discard scan and Share scan diagnostics are in its ⋯ menu.
 

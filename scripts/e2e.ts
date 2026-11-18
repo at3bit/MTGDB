@@ -277,6 +277,47 @@ try {
   await page.getByRole('dialog').getByRole('button', { name: 'Back' }).click();
   const stillSearched = await page.getByTestId('cards-summary').textContent();
   check(detailName === someName && detailPrice === 1 && stillSearched === summary, `card detail opens from the list (${detailName}) and Back keeps the search (${stillSearched})`);
+  // Quantity is set on the card's detail screen, saved, and counted in the collection's total and lists.
+  const money = (t: string | null) => Number((t ?? '').replace(/[^0-9.]/g, ''));
+  const near = (a: number, b: number) => Math.abs(a - b) <= (Math.max(a, b) >= 1000 ? 1.01 : 0.011);
+  const storedQtys = () =>
+    page.evaluate(async () => {
+      const db = await new Promise<IDBDatabase>((resolve) => { const r = indexedDB.open('keyval-store'); r.onsuccess = () => resolve(r.result); });
+      const col = await new Promise<{ binders: { cards: { qty?: number }[] }[] }>((resolve) => { const r = db.transaction('keyval').objectStore('keyval').get('collection-v1'); r.onsuccess = () => resolve(r.result); });
+      return col.binders.flatMap((b) => b.cards).filter((c) => c.qty != null).map((c) => c.qty);
+    });
+  const heroTotal = page.locator('.hero .money-l');
+  const totalBefore = money(await heroTotal.textContent());
+  const dialog = page.getByRole('dialog');
+  await listRows.first().locator('.card-row').click();
+  const each = money(await dialog.locator('.money-l').textContent());
+  const decreaseOff = await dialog.getByRole('button', { name: 'Decrease quantity' }).isDisabled();
+  await dialog.getByRole('button', { name: 'Increase quantity' }).click();
+  await dialog.getByRole('button', { name: 'Increase quantity' }).click();
+  const qtyShown = await dialog.getByTestId('quantity').textContent();
+  const holding = money(await dialog.getByTestId('holding-value').locator('.num').textContent());
+  await dialog.getByRole('button', { name: 'Back' }).click();
+  const totalAfter = money(await heroTotal.textContent());
+  const rowText = (await listRows.first().textContent()) ?? '';
+  const rowValue = money(await listRows.first().locator('.price').textContent());
+  const qtySummary = (await page.getByTestId('cards-summary').textContent()) ?? '';
+  await page.waitForTimeout(300);
+  const saved3 = await storedQtys();
+  check(
+    decreaseOff && qtyShown === '3' && near(holding, 3 * each) && near(totalAfter, totalBefore + 2 * each) && rowText.includes('×3') && near(rowValue, 3 * each) && near(money(qtySummary.split('·').pop() ?? ''), 3 * each) && saved3.join() === '3',
+    `quantity 1 -> ${qtyShown} on the detail screen: each ${each}, holding ${holding}; collection ${totalBefore} -> ${totalAfter}; row "${rowText.slice(0, 40)}…" ${rowValue}; "${qtySummary}"; stored ${JSON.stringify(saved3)}`,
+  );
+  // Back to one copy: the total returns and nothing extra is stored.
+  await listRows.first().locator('.card-row').click();
+  await dialog.getByRole('button', { name: 'Decrease quantity' }).click();
+  await dialog.getByRole('button', { name: 'Decrease quantity' }).click();
+  const qtyOne = await dialog.getByTestId('quantity').textContent();
+  const noHolding = await dialog.getByTestId('holding-value').count();
+  await dialog.getByRole('button', { name: 'Back' }).click();
+  const totalAgain = money(await heroTotal.textContent());
+  await page.waitForTimeout(300);
+  const saved1 = await storedQtys();
+  check(qtyOne === '1' && noHolding === 0 && near(totalAgain, totalBefore) && saved1.length === 0, `quantity back to ${qtyOne}: collection ${totalAgain} (was ${totalBefore}); stored quantities ${JSON.stringify(saved1)}`);
   await page.getByRole('button', { name: 'Collections', exact: true }).click();
   // "Do I own…?" from the home screen.
   await page.getByRole('button', { name: 'Search', exact: true }).click();
@@ -480,7 +521,7 @@ try {
   // CSV export (the share sheet on a phone; a download here).
   const [csvDl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export CSV' }).click()]);
   const csv = readFileSync(await csvDl.path(), 'utf8').split('\n');
-  check(csv[0].includes(',Collection,Page,Slot,') && csv.length === nowHas + 1, `CSV export: ${csv.length - 1} rows, header "${csv[0].slice(0, 60)}…"`);
+  check(csv[0].includes(',Finish,Quantity,Price USD,Total USD,') && csv[0].includes(',Collection,Page,Slot,') && csv.length === nowHas + 1, `CSV export: ${csv.length - 1} rows, header "${csv[0].slice(0, 60)}…"`);
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Collections', exact: true }).click();
 

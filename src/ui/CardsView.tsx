@@ -11,7 +11,10 @@ export interface CardItem {
   /** Index into the CardDB, or null for a pocket that wasn't identified. */
   card: number | null;
   finish: Finish;
+  /** Price of one copy. */
   price: number | null;
+  /** Copies held (1 if missing). */
+  qty?: number;
   trend: Trend | null;
   /** Where it is, e.g. "Trade Binder · page 5 · slot 3". */
   location: string;
@@ -26,11 +29,12 @@ export interface CardItem {
   onOpen?: () => void;
 }
 
-export type SortKey = 'order' | 'price' | 'gain' | 'gainPct' | 'drop' | 'name' | 'set';
+export type SortKey = 'order' | 'price' | 'value' | 'gain' | 'gainPct' | 'drop' | 'name' | 'set';
 
 const SORTS: { key: SortKey; label: string }[] = [
   { key: 'order', label: 'Page order' },
   { key: 'price', label: 'Highest price' },
+  { key: 'value', label: 'Highest value (× copies)' },
   { key: 'gain', label: 'Biggest gain, 30 days ($)' },
   { key: 'gainPct', label: 'Biggest gain, 30 days (%)' },
   { key: 'drop', label: 'Biggest drop, 30 days' },
@@ -68,9 +72,10 @@ export function ChangeBadge({ trend }: { trend: Trend | null }) {
   );
 }
 
-/** One card in a list: scan, name, where it is, price and its 30-day change. */
-export function CardRow({ id, thumb, name, finish, meta, price, trend, flag, onOpen }: { id?: string; thumb?: string; name: string; finish?: Finish; meta: string; price: number | null; trend?: Trend | null; flag?: string; onOpen?: () => void }) {
+/** One card in a list: scan, name, where it is, value (price × copies) and its 30-day change. */
+export function CardRow({ id, thumb, name, finish, meta, price, qty = 1, trend, flag, onOpen }: { id?: string; thumb?: string; name: string; finish?: Finish; meta: string; price: number | null; qty?: number; trend?: Trend | null; flag?: string; onOpen?: () => void }) {
   const src = thumb ?? (id ? scryfallImage(id, 'small') : '');
+  const many = qty > 1;
   return (
     <button className="card-row" onClick={onOpen} disabled={!onOpen}>
       {src ? <img src={src} alt="" loading="lazy" /> : <span style={{ width: 40, height: 56, flex: 'none', borderRadius: 3, background: 'var(--raised)' }} />}
@@ -78,12 +83,13 @@ export function CardRow({ id, thumb, name, finish, meta, price, trend, flag, onO
         <span className="card-name ellipsis" style={{ display: 'block' }}>
           {name}
           {finish && finish !== 'nonfoil' ? ' ✦' : ''}
+          {many && <span className="qty"> ×{qty}<span className="sr-only"> copies</span></span>}
         </span>
-        <span className="meta ellipsis" style={{ display: 'block' }}>{meta}</span>
+        <span className="meta ellipsis" style={{ display: 'block' }}>{many && price != null ? `${formatUSD(price)} each · ` : ''}{meta}</span>
         {flag && <span className="badge warn" style={{ marginTop: 4 }}>{flag}</span>}
       </span>
       <span className="right">
-        <span className="price num">{formatUSD(price)}</span>
+        <span className="price num">{price == null ? formatUSD(null) : formatUSD(price * qty)}</span>
         <ChangeBadge trend={trend ?? null} />
       </span>
     </button>
@@ -138,6 +144,7 @@ export function CardsView({ db, items, storageKey, defaultSort = 'order', initia
     const by: Record<SortKey, (a: CardItem, b: CardItem) => number> = {
       order: (a, b) => a.order - b.order,
       price: (a, b) => last(a.price, -1) - last(b.price, -1),
+      value: (a, b) => last(a.price == null ? null : a.price * (a.qty ?? 1), -1) - last(b.price == null ? null : b.price * (b.qty ?? 1), -1),
       gain: (a, b) => last(a.trend?.gain30, -1) - last(b.trend?.gain30, -1),
       gainPct: (a, b) => last(a.trend?.pct30, -1) - last(b.trend?.pct30, -1),
       drop: (a, b) => last(a.trend?.gain30, 1) - last(b.trend?.gain30, 1),
@@ -151,7 +158,8 @@ export function CardsView({ db, items, storageKey, defaultSort = 'order', initia
     return [...list].sort((a, b) => by[sort](a, b) || a.order - b.order);
   }, [items, query, sort, db]);
 
-  const total = shown.reduce((t, it) => t + (it.price ?? 0), 0);
+  const total = shown.reduce((t, it) => t + (it.price ?? 0) * (it.qty ?? 1), 0);
+  const count = shown.reduce((t, it) => t + (it.qty ?? 1), 0);
   const setViewSaved = (v: ViewMode) => {
     setView(v);
     save(`mtgdb-view-${storageKey}`, v);
@@ -187,7 +195,7 @@ export function CardsView({ db, items, storageKey, defaultSort = 'order', initia
           </select>
         </div>
         <div className="library-summary" data-testid="cards-summary">
-          {query ? `${shown.length} match${shown.length === 1 ? '' : 'es'} for “${query}”` : `${shown.length} card${shown.length === 1 ? '' : 's'}`} · {formatUSD(total)}
+          {query ? `${shown.length} match${shown.length === 1 ? '' : 'es'} for “${query}”` : `${count} card${count === 1 ? '' : 's'}`} · {formatUSD(total)}
         </div>
       </div>
 
@@ -209,9 +217,12 @@ export function CardsView({ db, items, storageKey, defaultSort = 'order', initia
               </button>
             ) : (
               <button key={it.key} className="ctard" onClick={it.onOpen}>
-                <img src={src} alt={info?.name ?? 'Unidentified card'} loading="lazy" />
+                <span className="ctard-img">
+                  <img src={src} alt={info?.name ?? 'Unidentified card'} loading="lazy" />
+                  {(it.qty ?? 1) > 1 && <span className="qty-badge">×{it.qty}<span className="sr-only"> copies</span></span>}
+                </span>
                 <span className="name">{nameFor(it)}{it.finish !== 'nonfoil' ? ' ✦' : ''}</span>
-                <span className="price">{formatUSD(it.price)}</span>
+                <span className="price">{it.price == null ? formatUSD(null) : formatUSD(it.price * (it.qty ?? 1))}</span>
               </button>
             );
           })}
@@ -223,8 +234,9 @@ export function CardsView({ db, items, storageKey, defaultSort = 'order', initia
             return (
               <button key={it.key} className="art-tile" onClick={it.onOpen}>
                 {info && <img src={scryfallArt(info.id)} alt="" loading="lazy" />}
+                {(it.qty ?? 1) > 1 && <span className="qty-badge">×{it.qty}<span className="sr-only"> copies</span></span>}
                 <span className="card-name">{nameFor(it)}</span>
-                <span className="price">{formatUSD(it.price)}</span>
+                <span className="price">{it.price == null ? formatUSD(null) : formatUSD(it.price * (it.qty ?? 1))}</span>
               </button>
             );
           })}
@@ -242,6 +254,7 @@ export function CardsView({ db, items, storageKey, defaultSort = 'order', initia
                   finish={it.finish}
                   meta={`${info ? `${info.setName} #${info.cn} · ` : ''}${it.location}`}
                   price={it.price}
+                  qty={it.qty}
                   trend={it.trend}
                   flag={it.flagged ? it.note ?? 'Check' : undefined}
                   onOpen={it.onOpen}

@@ -204,8 +204,17 @@ try {
   await page.waitForTimeout(3000);
   await shot('10d-card-detail');
   await shot('10e-card-detail-full', true);
+  // Three copies of the card: the stepper, the holding value, then the ×3 in the list and gallery.
+  for (let i = 0; i < 2; i++) await page.getByRole('dialog').getByRole('button', { name: 'Increase quantity' }).click();
+  await page.waitForTimeout(500);
+  await shot('10g-card-detail-quantity', true);
   await page.getByRole('dialog').getByRole('button', { name: 'Back' }).click();
+  await page.getByRole('button', { name: 'List', exact: true }).click();
+  await page.waitForTimeout(1500);
+  await shot('10h-collection-list-quantity');
   await page.getByRole('button', { name: 'Gallery', exact: true }).click();
+  await page.waitForTimeout(1500);
+  await shot('10i-collection-gallery-quantity');
   await page.getByRole('button', { name: 'Collection actions' }).click();
   await page.waitForTimeout(500);
   await shot('10f-collection-menu');

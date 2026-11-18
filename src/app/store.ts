@@ -17,6 +17,27 @@ export interface OwnedCard {
   finish: Finish;
   page: number;
   slot: number;
+  /** How many copies of this printing (and finish) the collection holds. Missing = 1. Scans never set it; it's changed on the card's detail screen. */
+  qty?: number;
+}
+
+/** Copies held of a saved card (at least 1). */
+export function copies(c: { qty?: number }): number {
+  const n = Math.round(c.qty ?? 1);
+  return Number.isFinite(n) && n >= 1 ? n : 1;
+}
+
+/** What the copies of a card are worth together: price × quantity (0 when there's no price). */
+export const rowValue = (r: { price: number | null; qty?: number }): number => (r.price ?? 0) * copies(r);
+
+/** Total value and number of copies of some cards. */
+export function totals(rows: { price: number | null; qty?: number }[]): { value: number; count: number } {
+  let value = 0, count = 0;
+  for (const r of rows) {
+    value += rowValue(r);
+    count += copies(r);
+  }
+  return { value, count };
 }
 
 export interface Binder {

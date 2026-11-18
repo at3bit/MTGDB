@@ -3,20 +3,20 @@ import { formatUSD, normalizeName, type CardDB } from '../core/carddb.ts';
 import { shareFile } from '../app/diagnostics.ts';
 import { exportReport, reportSummary, type ReportSummary } from '../app/report.ts';
 import type { LivePrices } from '../app/session.ts';
-import type { Collection, PriceHistory } from '../app/store.ts';
+import { rowValue, totals, type Collection, type PriceHistory } from '../app/store.ts';
 import { scryfallArt } from '../app/prices.ts';
 import type { Baselines } from '../core/baselines.ts';
-import { change30, ownedRows, uniqueRows, type OwnedRow } from './HomeScreen.tsx';
+import { change30, ownedRows, type OwnedRow } from './HomeScreen.tsx';
 import { CardRow, CardsView, type CardItem } from './CardsView.tsx';
 import { ActionRow, ActionSheet, collectionMana, IconButton, PriceBadge } from './kit.tsx';
 
 function toCSV(rows: OwnedRow[], db: CardDB): string {
   const esc = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
-  const lines = ['Name,Set,Set code,Collector number,Finish,Price USD,30-day change USD,Collection,Page,Slot,Scryfall ID'];
+  const lines = ['Name,Set,Set code,Collector number,Finish,Quantity,Price USD,Total USD,30-day change USD,Collection,Page,Slot,Scryfall ID'];
   for (const r of rows) {
     const info = db.info(r.card);
     lines.push(
-      [info.name, info.setName, info.set, info.cn, r.finish, r.price?.toFixed(2) ?? '', r.trend?.gain30?.toFixed(2) ?? '', r.binder, String(r.page), String(r.slot), r.id].map(esc).join(','),
+      [info.name, info.setName, info.set, info.cn, r.finish, String(r.qty), r.price?.toFixed(2) ?? '', r.price == null ? '' : rowValue(r).toFixed(2), r.trend?.gain30?.toFixed(2) ?? '', r.binder, String(r.page), String(r.slot), r.id].map(esc).join(','),
     );
   }
   return lines.join('\n');
@@ -32,6 +32,7 @@ function itemsFor(rows: OwnedRow[], withBinder: boolean, binderOrder: string[], 
     card: r.card,
     finish: r.finish,
     price: r.price,
+    qty: r.qty,
     trend: r.trend,
     location: `${withBinder ? `${r.binder} · ` : ''}page ${r.page}, slot ${r.slot}`,
     order: binderOrder.indexOf(r.binder) * 1e6 + r.page * 10 + r.slot,
@@ -57,7 +58,7 @@ interface BinderProps {
 export function BinderScreen({ db, name, collection, live, history, baselines, onBack, onDelete, onOpenCard }: BinderProps) {
   const rows = ownedRows(db, collection, live, history, baselines, name);
   const binder = collection.binders.find((b) => b.name === name);
-  const total = rows.reduce((t, r) => t + (r.price ?? 0), 0);
+  const { value: total, count } = totals(rows);
   const change = change30(rows);
   const best = rows.reduce<OwnedRow | null>((m, r) => ((r.price ?? 0) > (m?.price ?? -1) ? r : m), null);
   const pages = new Set(rows.map((r) => r.page)).size;
@@ -100,13 +101,13 @@ export function BinderScreen({ db, name, collection, live, history, baselines, o
           {change && Math.abs(change.gain) >= 0.05 && <PriceBadge change={change.gain} pct={change.pct} suffix="30 days" />}
         </div>
         <div className="small muted">
-          {plural(rows.length, 'card')} · {plural(pages, 'page')}
+          {plural(count, 'card')} · {plural(pages, 'page')}
           {binder && ` · scanned ${new Date(binder.updatedAt).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' })}`}
         </div>
       </header>
       <CardsView db={db} items={itemsFor(rows, false, [name], onOpenCard)} storageKey="binder" defaultSort="price" />
       {menu && (
-        <ActionSheet title={name} subtitle={`${plural(rows.length, 'card')} · ${formatUSD(total)}`} onClose={() => setMenu(false)}>
+        <ActionSheet title={name} subtitle={`${plural(count, 'card')} · ${formatUSD(total)}`} onClose={() => setMenu(false)}>
           <ActionRow icon="download" label="Export CSV" onClick={() => exportCSV(rows, db, name)} />
           {report && (
             <ActionRow
@@ -122,7 +123,7 @@ export function BinderScreen({ db, name, collection, live, history, baselines, o
             label="Delete collection"
             danger
             onClick={() => {
-              if (confirm(`Delete “${name}” and its ${rows.length} cards from this phone? This can’t be undone.`)) {
+              if (confirm(`Delete “${name}” and its ${plural(count, 'card')} from this phone? This can’t be undone.`)) {
                 setMenu(false);
                 onDelete();
               }
@@ -146,7 +147,8 @@ interface SearchProps {
 
 /** One search across every collection ("do I own this?"), with matching cards you don't own yet. */
 export function SearchScreen({ db, collection, live, history, baselines, query, onOpenCard }: SearchProps) {
-  const rows = uniqueRows(ownedRows(db, collection, live, history, baselines));
+  // Every stored card, so a card kept in two collections shows (and counts) in both.
+  const rows = ownedRows(db, collection, live, history, baselines);
   const order = collection.binders.map((b) => b.name);
   const [q, setQ] = useState(query ?? '');
   const owned = useMemo(() => new Set(rows.map((r) => db.nameOf[r.card])), [rows, db]);
