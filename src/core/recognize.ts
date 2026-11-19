@@ -58,6 +58,20 @@ export interface RecognizeConfig {
   widerSearch: boolean;
   /** ...and its unsure result replaces the first look's only if it's closer by at least this much. */
   widerGain: number;
+  /**
+   * A card in the collection's colours that's clear of the other cards of those colours, but not of all cards,
+   * is sure only when it matches at least this well. On real Blue and Lands binders, 98% of right sure
+   * matches were at 31 or better (3 of 802 above 34), while 7 of 8 sure but wrong ones were at 36 to 42:
+   * a weak match to one of hundreds of Island printings looked clear of every other land.
+   */
+  colourOnlyDistance: number;
+  /**
+   * Once the card is known, cut its crops (title for the name read, set symbol, collector line, the review
+   * photo) from the window that fits that card best, trying the wider windows too. A card can match from a
+   * window that sits a little off it; small print can't be read from one. On a real Lands binder every
+   * collector line read on the wrongly-printed cards was noise.
+   */
+  refineCrops: boolean;
 }
 
 export const DEFAULT_RECOGNIZE: RecognizeConfig = {
@@ -74,6 +88,8 @@ export const DEFAULT_RECOGNIZE: RecognizeConfig = {
   categoryLeeway: 6,
   widerSearch: true,
   widerGain: 8,
+  colourOnlyDistance: 34,
+  refineCrops: true,
 };
 
 export type PocketStatus = 'empty' | 'matched' | 'uncertain' | 'unknown';
@@ -358,7 +374,10 @@ export function recognizePocket(pc: PocketCrop, idx: MatchIndex, cfg: RecognizeC
     const rivals = pref && best && pref[best.card] ? ranked.matches.filter((m) => pref[m.card]) : ranked.matches;
     const other = best ? rivals.find((m) => idx.nameOf[m.card] !== idx.nameOf[best.card]) : undefined;
     const otherD = other ? other.d : best ? best.d + 30 : Infinity;
-    const confident = !!best && best.d <= cfg.acceptDistance && otherD - best.d >= cfg.acceptMargin;
+    // The gap to the next different card of any colour.
+    const anyOther = best ? ranked.matches.find((m) => idx.nameOf[m.card] !== idx.nameOf[best.card]) : undefined;
+    const clearOfAll = !anyOther || anyOther.d - best!.d >= cfg.acceptMargin;
+    const confident = !!best && best.d <= cfg.acceptDistance && otherD - best.d >= cfg.acceptMargin && (clearOfAll || best.d <= cfg.colourOnlyDistance);
     let status: PocketStatus = 'unknown';
     if (confident) status = 'matched';
     else if (best && best.d <= cfg.maybeDistance) status = 'uncertain';
@@ -388,9 +407,20 @@ export function recognizePocket(pc: PocketCrop, idx: MatchIndex, cfg: RecognizeC
     // unsure at 36, lost to Sick and Tired at 32): the second look counts only when it's clearly better.
     if (again.status === 'matched' || (rank[again.status] >= rank[found.status] && d(again) <= d(found) - cfg.widerGain)) found = again;
   }
-  const { matches, offCategory, bestWindow, bestK, otherD } = found;
+  const { matches, offCategory, otherD } = found;
   if (lowDetail && !found.confident) return empty();
   const status = found.status;
+  let bestWindow = found.bestWindow;
+  let query = found.qs[found.bestK];
+  if (cfg.refineCrops && matches.length && found.qs.length === fps.length) {
+    // The first look settled it: try the wider windows against this one card to place the crops.
+    let bd = fpDistance(query, idx.fps, matches[0].card);
+    for (const w of wideWindows(cfg)) {
+      const q = fingerprint(pc.crop, w, pc.gray);
+      const d = fpDistance(q, idx.fps, matches[0].card);
+      if (d < bd) [bd, bestWindow, query] = [d, w, q];
+    }
+  }
 
   // Crops from the full-resolution frame (sharper than the pocket crop): the title line for OCR, the set symbol for printings.
   const regionOf = (r: readonly [number, number, number, number]): Rect => ({ x: bestWindow.x + bestWindow.w * r[0], y: bestWindow.y + bestWindow.h * r[1], w: bestWindow.w * (r[2] - r[0]), h: bestWindow.h * (r[3] - r[1]) });
@@ -413,7 +443,7 @@ export function recognizePocket(pc: PocketCrop, idx: MatchIndex, cfg: RecognizeC
     infoCrop,
     symbolCrop,
     contrast: meanStd(grayRect(pc.gray, bestWindow, 48, 67)).std,
-    query: found.qs[bestK],
+    query,
     borderLuma: borderLuma(pc.gray, bestWindow),
   };
 }

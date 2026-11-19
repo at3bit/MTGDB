@@ -84,7 +84,18 @@ link. Each person's collection is stored only on their own phone.
    cards (and so read their names from the wrong strip); the second look
    matched all 10 by clear margins. Its unsure result replaces the first
    look's only if it's closer by 8 or more, since more windows also let a wrong
-   card fit a little better by chance.
+   card fit a little better by chance. Replaying the real Blue UC/R and Lands
+   scan reports (846 cards): right first names went from 418 to 452 of 464 and
+   342 to 363 of 382 (with the collection's colour set).
+   Once the card is known, its crops (title, set symbol, collector line, review
+   photo) are cut from the window that fits it best, trying the wider windows
+   too: a card matches from a window a little off it, but small print can't be
+   read from one (on those reports the name read went from 194 to 232 and 170
+   to 208 cards, read from the small report photos).
+   With colours set, a card that's clear only of the other cards of those
+   colours (not of all cards) counts as sure only when it matches at 34 or
+   better: 98% of right sure matches were at 31 or better, while weak matches to
+   one of hundreds of Island printings had looked clear of every other land.
 5. **Name reading** (`src/app/ocr.ts`). Every card's title line is read with
    Tesseract (served by the app itself) and fuzzy-matched to card names, as a
    cross-check: when it agrees with the image match the card is confirmed;
@@ -255,6 +266,10 @@ link. Each person's collection is stored only on their own phone.
   after its pages (printings it already has aren't added twice), so a big
   binder can be scanned in several sittings. To start a collection over,
   delete it and create it again.
+- **Collection colours** stay picked while the name is typed or changed, and
+  are remembered under the name the scan starts with. (They used to be filed
+  under the name as it was when tapped: picking Blue before typing "Blue UC/R"
+  scanned with no colours at all.)
 - **Unsure guesses**: when the app isn't sure of a card (or can't identify
   it), every candidate in the collection's colours comes before the others
   (a green Ooze was offered for Grim Return, a Plains for Stitch Together,

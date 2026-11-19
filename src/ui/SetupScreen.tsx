@@ -70,16 +70,21 @@ export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, o
   const fileInput = useRef<HTMLInputElement>(null);
   const photoInput = useRef<HTMLInputElement>(null);
 
-  // What each binder holds is remembered by its name ("Black binder" stays Black).
-  const [byBinder, setByBinder] = useState<Record<string, number>>(() => readJSON(CATS_KEY, {}));
-  const categories = byBinder[name.trim()] ?? 0;
-  const setCategories = (mask: number) => {
-    const next = { ...byBinder, [name.trim()]: mask };
-    setByBinder(next);
-    writeJSON(CATS_KEY, next);
-  };
+  // What each binder holds is remembered by its name ("Black binder" stays Black). The colours picked here
+  // stay picked while the name is typed or changed (they used to be filed under the name as it was then, so
+  // picking Blue before typing "Blue UC/R" scanned with no colours at all); they're saved under the name the
+  // scan starts with, and a collection that has colours remembered shows them when it's picked.
+  const [byBinder] = useState<Record<string, number>>(() => readJSON(CATS_KEY, {}));
+  const [categories, setCategories] = useState<number>(() => byBinder[name.trim()] ?? 0);
+  useEffect(() => {
+    const remembered = byBinder[name.trim()];
+    if (remembered !== undefined) setCategories(remembered);
+  }, [name, byBinder]);
   const [blankFillers, setBlankFillers] = useState(() => readJSON(FILLERS_KEY, false));
-  const start = (source: ScanSource) => onStart(name.trim(), source, { categories, blankFillers, addToExisting: !creating && !!pickedSaved });
+  const start = (source: ScanSource) => {
+    writeJSON(CATS_KEY, { ...readJSON<Record<string, number>>(CATS_KEY, {}), [name.trim()]: categories });
+    onStart(name.trim(), source, { categories, blankFillers, addToExisting: !creating && !!pickedSaved });
+  };
   /**
    * The Photos picker is open, or handing the photos over: iOS converts each one before the page gets
    * any, which takes a while for dozens of photos, so the app says it's waiting rather than look idle.

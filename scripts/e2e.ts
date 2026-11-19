@@ -38,7 +38,8 @@ const file: CardsFile = {
   built: new Date().toISOString(),
   source: 'Synthetic test data',
   sets: { tst: 'Synthetic Test Set' },
-  cards: cards.map((_, i) => [`00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, `Synthetic Card ${String(i).padStart(3, '0')}`, 'tst', String(i + 1), 'common', 3, Math.round(r() * 5000) / 100, null, null]),
+  // Colours cycle white, blue, black, red, green (CATEGORY bits), so the setup screen offers colour chips.
+  cards: cards.map((_, i) => [`00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, `Synthetic Card ${String(i).padStart(3, '0')}`, 'tst', String(i + 1), 'common', 3, Math.round(r() * 5000) / 100, null, null, 'black', 0, 1 << (i % 5)]),
 };
 const fps = new Uint32Array(N * FP_WORDS);
 cards.forEach((c, i) => fps.set(fingerprint(toReferenceSize(c)), i * FP_WORDS));
@@ -391,6 +392,15 @@ try {
   const backTo = await page.getByLabel('Add to collection').inputValue();
   check(offered === 'Trade Binder' && sameName === 1 && blocked && backTo === 'Trade Binder', `setup offers the saved collection (${offered}); a new one can't reuse its name (blocked: ${blocked}) and "Add to it instead" picks it`);
   await page.getByRole('button', { name: '‹ Back' }).click();
+  // Colours picked before the name is typed stay picked (they used to be filed under the half-typed name).
+  await page.getByRole('button', { name: 'Scan cards' }).click();
+  await page.getByRole('button', { name: '+ Create new collection' }).click();
+  await page.getByRole('button', { name: 'Blue', exact: true }).click();
+  await page.getByLabel('New collection name').fill('Blue UC/R');
+  const bluePicked = await page.getByRole('button', { name: 'Blue', exact: true }).getAttribute('aria-pressed');
+  const anything = await page.getByRole('button', { name: 'Anything', exact: true }).getAttribute('class');
+  await page.getByRole('button', { name: '‹ Back' }).click();
+  check(bluePicked === 'true' && !anything?.includes('on'), `colours picked before naming the collection stay picked (Blue: ${bluePicked})`);
 
   // Quick flips: the middle spread never settles, so it must come from the stillest moment of its pause.
   await newCollection('Quick Flips');
