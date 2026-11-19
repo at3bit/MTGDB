@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { CardDB, decodeFingerprints, encodeFingerprints, type CardRow, type CardsFile } from '../src/core/carddb.ts';
 import { FP_WORDS, fingerprint } from '../src/core/fingerprint.ts';
 import { originSet, parseCollectorLine, printingFromCollector, resolvePrinting } from '../src/core/printing.ts';
-import { addReading, applyInfoRead, approvePocket, needsInfoOcr, preferPageSets, type PocketView, type Spread } from '../src/app/session.ts';
+import { addReading, applyInfoRead, approvePocket, cardOptions, needsInfoOcr, preferPageSets, recentSets, type PocketView, type Spread } from '../src/app/session.ts';
 import { makeCard, toReferenceSize } from './synth.ts';
 
 // [id, name, set, collector number, rarity, finish bits (1 nonfoil, 2 foil), usd, usd foil, usd etched, border, priority]
@@ -96,6 +96,27 @@ describe('page set', () => {
   });
 });
 
+describe('searching to fix a card', () => {
+  it('offers the printing from the set of the cards just before it first', () => {
+    // Three Legions cards saved, then a Dismember the app got wrong: the user searches "Dismember".
+    const spread = spreadOf([approvePocket(pocket(0, 8), 8, 'nonfoil'), approvePocket(pocket(1, 9), 9, 'nonfoil'), pocket(2, 10), pocket(3, 4)]);
+    const sets = recentSets([spread], { spread: spread.id, page: 0, slot: 3 }, db);
+    expect(sets).toEqual(['lgn', 'lgn', 'lgn']);
+    const dismember = db.nameOf[14];
+    // Without context the printings come most alike first; a binder of New Phyrexia cards puts nph first,
+    // one of Modern Masters cards puts mm2 first.
+    const plain = cardOptions(db, spread.pockets[3], dismember);
+    expect(plain.sort()).toEqual([14, 15]);
+    expect(cardOptions(db, spread.pockets[3], dismember, ['mm2', 'lgn'])[0]).toBe(15);
+    expect(cardOptions(db, spread.pockets[3], dismember, ['nph', 'mm2', 'mm2'])[0]).toBe(15);
+    expect(cardOptions(db, spread.pockets[3], dismember, ['nph', 'nph', 'mm2'])[0]).toBe(14);
+  });
+  it('skips empty sleeves and cards still to be checked when looking back', () => {
+    const spread = spreadOf([pocket(0, 8), { ...pocket(1, 13), status: 'uncertain' as const }, { ...pocket(2, null), status: 'empty' as const }, pocket(3, 4)]);
+    expect(recentSets([spread], { spread: spread.id, page: 0, slot: 3 }, db)).toEqual(['lgn']);
+  });
+});
+
 describe('collector line', () => {
   const known = (c: string) => db.hasSet(c);
   it('reads set code and number off modern cards, as OCR garbles them', () => {
@@ -150,6 +171,16 @@ describe('unsure guesses', () => {
     expect(p).toMatchObject({ chosen: 1, status: 'uncertain', offCategory: false });
     // A confident off-colour match (a misfiled card) is left alone.
     expect(toPocketView(wire([{ card: 0, d: 18 }, { card: 1, d: 40 }]), cdb).chosen).toBe(0);
+  });
+  it('every in-colour candidate comes before the off-colour ones, for unidentified cards too', async () => {
+    const { inColourFirst } = await import('../src/app/session.ts');
+    const ms = [{ card: 0, d: 50 }, { card: 2, d: 52 }, { card: 1, d: 60 }];
+    // Card 1 (Grim Return) is the only black one: it goes first, the rest keep their order.
+    expect(inColourFirst({ matches: ms, status: 'unknown', otherNameDistance: 52 }, cdb).map((m) => m.card)).toEqual([1, 0, 2]);
+    expect(inColourFirst({ matches: ms, status: 'uncertain', otherNameDistance: 52 }, cdb).map((m) => m.card)).toEqual([1, 0, 2]);
+    // Already in colour first: the same list comes back.
+    const ok = [{ card: 1, d: 50 }, { card: 0, d: 52 }];
+    expect(inColourFirst({ matches: ok, status: 'unknown', otherNameDistance: 52 }, cdb)).toBe(ok);
   });
   it('joke and playtest sets are left out of picture matching', () => {
     expect(Array.from(cdb.matchable)).toEqual([1, 1, 1, 0]);

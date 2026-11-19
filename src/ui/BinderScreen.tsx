@@ -6,9 +6,9 @@ import type { LivePrices } from '../app/session.ts';
 import { rowValue, totals, type Collection, type PriceHistory } from '../app/store.ts';
 import { scryfallArt } from '../app/prices.ts';
 import type { Baselines } from '../core/baselines.ts';
-import { change30, ownedRows, type OwnedRow } from './HomeScreen.tsx';
+import { change30, coverRow, ownedRows, type OwnedRow } from './HomeScreen.tsx';
 import { CardRow, CardsView, type CardItem } from './CardsView.tsx';
-import { ActionRow, ActionSheet, collectionMana, IconButton, PriceBadge } from './kit.tsx';
+import { ActionRow, ActionSheet, collectionMana, Icon, IconButton, PriceBadge } from './kit.tsx';
 
 function toCSV(rows: OwnedRow[], db: CardDB): string {
   const esc = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
@@ -52,20 +52,58 @@ interface BinderProps {
   onBack: () => void;
   onDelete: () => void;
   onOpenCard: (row: OwnedRow) => void;
+  /** Choose the card whose art represents the collection (null: its most valuable card). */
+  onSetCover: (id: string | null) => void;
+}
+
+/** Pick the card whose art stands for the collection: its cards' art, most valuable first, with a search. */
+function CoverPicker({ db, rows, current, onPick, onClose }: { db: CardDB; rows: OwnedRow[]; current?: string; onPick: (id: string | null) => void; onClose: () => void }) {
+  const [q, setQ] = useState('');
+  const cards = useMemo(() => {
+    const seen = new Set<string>();
+    const nq = normalizeName(q);
+    return [...rows]
+      .sort((a, b) => (b.price ?? 0) - (a.price ?? 0))
+      .filter((r) => !seen.has(r.id) && (seen.add(r.id), !nq || normalizeName(r.name).includes(nq) || normalizeName(db.info(r.card).setName).includes(nq)));
+  }, [rows, q, db]);
+  return (
+    <ActionSheet title="Cover art" subtitle="The card whose art stands for this collection" onClose={onClose}>
+      <div className="cover-picker">
+        <button className={`btn block ${current ? 'quiet' : 'primary'}`} onClick={() => onPick(null)} aria-pressed={!current}>
+          {current ? 'Use the most valuable card (automatic)' : '✓ Most valuable card (automatic)'}
+        </button>
+        <div className="search-field">
+          <Icon name="search" size={20} />
+          <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search this collection" aria-label="Search this collection" />
+        </div>
+        <div className="art-grid" role="radiogroup" aria-label="Cover art">
+          {cards.map((r) => (
+            <button key={r.id} className={`art-tile${current === r.id ? ' picked' : ''}`} role="radio" aria-checked={current === r.id} onClick={() => onPick(r.id)}>
+              <img src={scryfallArt(r.id)} alt="" loading="lazy" />
+              <span className="card-name">{r.name}</span>
+              <span className="price">{db.info(r.card).setName}</span>
+            </button>
+          ))}
+        </div>
+        {cards.length === 0 && <p className="muted small">No card in this collection matches “{q}”.</p>}
+      </div>
+    </ActionSheet>
+  );
 }
 
 /** One collection: its header, the library (Gallery, List, Art) and a menu of rare actions. */
-export function BinderScreen({ db, name, collection, live, history, baselines, onBack, onDelete, onOpenCard }: BinderProps) {
+export function BinderScreen({ db, name, collection, live, history, baselines, onBack, onDelete, onOpenCard, onSetCover }: BinderProps) {
   const rows = ownedRows(db, collection, live, history, baselines, name);
   const binder = collection.binders.find((b) => b.name === name);
   const { value: total, count } = totals(rows);
   const change = change30(rows);
-  const best = rows.reduce<OwnedRow | null>((m, r) => ((r.price ?? 0) > (m?.price ?? -1) ? r : m), null);
+  const best = coverRow(rows, binder?.cover);
   const pages = new Set(rows.map((r) => r.page)).size;
   const mana = binder ? collectionMana(db, binder) : 'C';
   const [report, setReport] = useState<ReportSummary | null>(null);
   const [sharing, setSharing] = useState(false);
   const [menu, setMenu] = useState(false);
+  const [picking, setPicking] = useState(false);
   useEffect(() => {
     let live = true;
     void reportSummary(name).then((r) => live && setReport(r));
@@ -108,6 +146,15 @@ export function BinderScreen({ db, name, collection, live, history, baselines, o
       <CardsView db={db} items={itemsFor(rows, false, [name], onOpenCard)} storageKey="binder" defaultSort="price" />
       {menu && (
         <ActionSheet title={name} subtitle={`${plural(count, 'card')} · ${formatUSD(total)}`} onClose={() => setMenu(false)}>
+          <ActionRow
+            icon="image"
+            label="Choose cover art"
+            note={binder?.cover ? `Now: ${best?.name ?? 'a card no longer here'}` : 'Now: the most valuable card'}
+            onClick={() => {
+              setMenu(false);
+              setPicking(true);
+            }}
+          />
           <ActionRow icon="download" label="Export CSV" onClick={() => exportCSV(rows, db, name)} />
           {report && (
             <ActionRow
@@ -130,6 +177,18 @@ export function BinderScreen({ db, name, collection, live, history, baselines, o
             }}
           />
         </ActionSheet>
+      )}
+      {picking && (
+        <CoverPicker
+          db={db}
+          rows={rows}
+          current={binder?.cover}
+          onPick={(id) => {
+            onSetCover(id);
+            setPicking(false);
+          }}
+          onClose={() => setPicking(false)}
+        />
       )}
     </main>
   );

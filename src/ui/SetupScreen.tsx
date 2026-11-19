@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CATEGORY, type Category } from '../core/carddb.ts';
 import type { Collection } from '../app/store.ts';
 import type { ScanSource } from './ScanScreen.tsx';
@@ -53,9 +53,11 @@ interface Props {
   onBack: () => void;
   /** Opened from the "New collection" tile: start on the name field. */
   startCreating?: boolean;
+  /** Ask for photos as they are (HEIC) rather than converted to JPEG: see Settings.keepHeic. */
+  keepHeic?: boolean;
 }
 
-export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, onBack, hasCategories, startCreating }: Props) {
+export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, onBack, hasCategories, startCreating, keepHeic }: Props) {
   const existing = collection.binders;
   // Add to a collection saved earlier (the most recently scanned first), or create a new one.
   const [creating, setCreating] = useState(existing.length === 0 || !!startCreating);
@@ -78,9 +80,34 @@ export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, o
   };
   const [blankFillers, setBlankFillers] = useState(() => readJSON(FILLERS_KEY, false));
   const start = (source: ScanSource) => onStart(name.trim(), source, { categories, blankFillers, addToExisting: !creating && !!pickedSaved });
+  /**
+   * The Photos picker is open, or handing the photos over: iOS converts each one before the page gets
+   * any, which takes a while for dozens of photos, so the app says it's waiting rather than look idle.
+   */
+  const [picking, setPicking] = useState(false);
+  useEffect(() => {
+    const input = photoInput.current;
+    if (!input) return;
+    const cancel = () => setPicking(false);
+    input.addEventListener('cancel', cancel);
+    return () => input.removeEventListener('cancel', cancel);
+  }, []);
 
   return (
     <main>
+      {picking && (
+        <div className="picking" role="status" aria-live="polite" data-testid="picking">
+          <div className="spinner" aria-hidden="true" />
+          <p className="title-m" style={{ margin: 0 }}>Getting your photos…</p>
+          <p className="muted small" style={{ margin: 0 }}>
+            The Photos app prepares each photo before handing it over: a few seconds for a handful, a minute or more for 50 or more.
+            {keepHeic ? '' : ' Faster photo import in Settings skips most of this.'}
+          </p>
+          <button className="btn quiet" onClick={() => setPicking(false)}>
+            Cancel
+          </button>
+        </div>
+      )}
       <div className="topbar">
         <button className="back" onClick={onBack}>‹ Back</button>
         <h1>Scan cards</h1>
@@ -150,7 +177,14 @@ export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, o
           />
           <SwitchRow checked={englishOnly} onChange={onEnglishOnly} title="English cards only" description="Ignore foreign printings, which often share art with English ones." />
         </div>
-        <button className="btn primary block large" disabled={!ready} onClick={() => photoInput.current?.click()}>
+        <button
+          className="btn primary block large"
+          disabled={!ready}
+          onClick={() => {
+            setPicking(true);
+            photoInput.current?.click();
+          }}
+        >
           Upload photos (one per page)
         </button>
         <p className="muted small" style={{ margin: '-4px 0 0' }}>
@@ -165,13 +199,14 @@ export function SetupScreen({ collection, englishOnly, onEnglishOnly, onStart, o
         <input
           ref={photoInput}
           type="file"
-          accept="image/*"
+          accept={keepHeic ? 'image/*,image/heic,image/heif' : 'image/*'}
           multiple
           style={{ display: 'none' }}
           data-testid="photo-input"
           onChange={(e) => {
             const files = [...(e.target.files ?? [])];
             e.target.value = '';
+            setPicking(false);
             if (files.length) start(files);
           }}
         />

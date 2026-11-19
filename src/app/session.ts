@@ -110,23 +110,24 @@ export function releasePhotos() {
 }
 
 /**
- * A card the app isn't sure of whose closest match isn't one of the binder's colours: the closest one
- * that is comes first. Unsure off-colour guesses were all wrong on a real black binder (a green Ooze for
- * Grim Return, a Plains for Stitch Together). A confident off-colour match (a misfiled card) stays.
+ * A card the app isn't sure of: candidates in the binder's colours come first, the rest after, each in
+ * order of likeness. Unsure off-colour guesses were all wrong on a real black binder (a green Ooze for
+ * Grim Return, a Plains for Stitch Together) and on a blue one (Canopy Surge for Clone, Shivan Dragon for
+ * Cephalid Inkshrouder). A confident off-colour match (a misfiled card) stays.
  */
-function inColourFirst(p: WirePocket, db: CardDB): Match[] {
+export function inColourFirst(p: Pick<WirePocket, 'matches' | 'status' | 'otherNameDistance'>, db: CardDB): Match[] {
   const pref = db.preferred;
   const best = p.matches[0];
-  if (!pref || !best || p.status !== 'uncertain' || !p.offCategory) return p.matches;
+  if (!pref || !best || (p.status !== 'uncertain' && p.status !== 'unknown')) return p.matches;
   const confident = best.d <= ACCEPT.acceptDistance && p.otherNameDistance - best.d >= ACCEPT.acceptMargin;
-  const i = p.matches.findIndex((m) => pref[m.card]);
-  if (confident || i <= 0) return p.matches;
-  return [p.matches[i], ...p.matches.filter((_, k) => k !== i)];
+  if (confident) return p.matches;
+  const sorted = [...p.matches.filter((m) => pref[m.card]), ...p.matches.filter((m) => !pref[m.card])];
+  return sorted.every((m, i) => m === p.matches[i]) ? p.matches : sorted;
 }
 
 export function toPocketView(w: WirePocket, db: CardDB): PocketView {
   const reordered = inColourFirst(w, db);
-  const p = reordered === w.matches ? w : { ...w, matches: reordered, offCategory: false };
+  const p = reordered === w.matches ? w : { ...w, matches: reordered, offCategory: !db.preferred![reordered[0].card] };
   const chosen = p.status === 'empty' || !p.matches.length || p.status === 'unknown' ? null : p.matches[0].card;
   return settlePrinting(
     {
@@ -572,11 +573,40 @@ export function findPocket(spreads: Spread[], k: PocketKey): PocketView | undefi
 const MAX_PRINTINGS = 30;
 
 /**
+ * Sets of the few cards just before this pocket in binder order (the ones the user just saved or the app
+ * identified), most recent first. Binders are mostly sorted by set, so a name searched to fix a card is
+ * most likely the printing from the same set (see cardOptions).
+ */
+export function recentSets(spreads: Spread[], key: PocketKey, db: CardDB, n = 3): string[] {
+  const order = checkList(spreads);
+  const at = order.findIndex((k) => k.spread === key.spread && k.page === key.page && k.slot === key.slot);
+  const out: string[] = [];
+  for (let i = (at < 0 ? order.length : at) - 1; i >= 0 && out.length < n; i--) {
+    const p = findPocket(spreads, order[i]);
+    if (!p || p.chosen === null || p.ghost || p.cardBack || p.status === 'empty' || nameUnsure(p)) continue;
+    out.push(db.info(p.chosen).set);
+  }
+  return out;
+}
+
+/** A name's printings with the ones from `sets` first (the set seen most often there first, then the most recent). */
+function bySets(cards: number[], sets: string[] | undefined, db: CardDB): number[] {
+  if (!sets?.length) return cards;
+  const score = (c: number) => {
+    const set = db.info(c).set;
+    const hits = sets.filter((s) => s === set).length;
+    return hits ? hits * 10 - sets.indexOf(set) : 0;
+  };
+  return cards.map((c, i) => ({ c, i, s: score(c) })).sort((a, b) => b.s - a.s || a.i - b.i).map((x) => x.c);
+}
+
+/**
  * Options to swipe through for a pocket, best first: its current pick, the other printings of that name
  * (the most alike to the photo first), the name read from the card, then the other cards it looks like.
- * With `nameIdx` (a searched name): that name's printings only.
+ * With `nameIdx` (a searched name): that name's printings only. Printings from `recent` sets (the cards
+ * just before it, see recentSets) come before the other printings of a name.
  */
-export function cardOptions(db: CardDB, p: PocketView, nameIdx?: number): number[] {
+export function cardOptions(db: CardDB, p: PocketView, nameIdx?: number, recent?: string[]): number[] {
   const out: number[] = [];
   const seen = new Set<number>();
   const add = (c: number | undefined) => {
@@ -584,7 +614,7 @@ export function cardOptions(db: CardDB, p: PocketView, nameIdx?: number): number
     seen.add(c);
     out.push(c);
   };
-  const printingsOf = (n: number) => rankPrintings(db, n, p).slice(0, MAX_PRINTINGS).map((r) => r.card);
+  const printingsOf = (n: number) => bySets(rankPrintings(db, n, p).map((r) => r.card), recent, db).slice(0, MAX_PRINTINGS);
   if (nameIdx !== undefined) {
     printingsOf(nameIdx).forEach(add);
     return out;

@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import { diagnostics, shareDiagnostics } from '../app/diagnostics.ts';
 import { formatUSD, type CardDB } from '../core/carddb.ts';
 import type { Baselines } from '../core/baselines.ts';
-import { binderEntries, checkList, findPocket, nameUnsure, needsCheck, pocketPrice, spreadTotal, type PocketKey, type LivePrices, type PocketView, type Spread } from '../app/session.ts';
+import { binderEntries, checkList, findPocket, nameUnsure, needsCheck, pocketPrice, recentSets, spreadTotal, type PocketKey, type LivePrices, type PocketView, type Spread } from '../app/session.ts';
 import { trendFor, type PriceHistory } from '../app/store.ts';
 import { CardsView, type CardItem } from './CardsView.tsx';
 import { CardCheck } from './CardCheck.tsx';
@@ -236,6 +236,7 @@ export function ReviewScreen({ db, binder, spreads, pagesPerSpread, live, histor
           onBack={() => setCheck(check.i > 0 && !check.single ? { ...check, i: check.i - 1 } : null)}
           onClose={() => setCheck(null)}
           onReadName={() => onReadName(checking.spread, checkingPocket)}
+          recentSets={recentSets(spreads, checking, db)}
         />
       )}
       {check && !checking && (

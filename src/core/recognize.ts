@@ -49,6 +49,15 @@ export interface RecognizeConfig {
   blankFraction: number;
   /** A card outside the binder's colours beats one in them only if it matches better by more than this. */
   categoryLeeway: number;
+  /**
+   * When a card isn't matched confidently, look again with smaller, shifted card windows (see wideWindows).
+   * Pages whose pockets are roomier than the cards leave the card smaller than the outline and resting low
+   * in its pocket: on a real binder the first look matched none of 10 such cards; the wider look matched all
+   * 10, each by a clear margin, without a colour filter.
+   */
+  widerSearch: boolean;
+  /** ...and its unsure result replaces the first look's only if it's closer by at least this much. */
+  widerGain: number;
 }
 
 export const DEFAULT_RECOGNIZE: RecognizeConfig = {
@@ -63,6 +72,8 @@ export const DEFAULT_RECOGNIZE: RecognizeConfig = {
   // images only Scryfall's blank substitute cards (0.40-0.47) come near.
   blankFraction: 0.45,
   categoryLeeway: 6,
+  widerSearch: true,
+  widerGain: 8,
 };
 
 export type PocketStatus = 'empty' | 'matched' | 'uncertain' | 'unknown';
@@ -230,6 +241,24 @@ export function candidateWindows(g: GrayImage, cfg: RecognizeConfig): Rect[] {
   return out;
 }
 
+/**
+ * The second look (see RecognizeConfig.widerSearch): the card at 94%, 90% and 86% of the nominal window,
+ * nudged 4% left or right and 3% up or 1.5% or 6% down. 27 windows.
+ */
+export function wideWindows(cfg: RecognizeConfig): Rect[] {
+  const n = nominalWindow(cfg);
+  const out: Rect[] = [];
+  for (const s of [0.94, 0.9, 0.86]) {
+    for (const dx of [-0.04, 0, 0.04]) {
+      for (const dy of [-0.03, 0.015, 0.06]) {
+        const w = n.w * s, h = n.h * s;
+        out.push({ x: n.x + (n.w - w) / 2 + dx * n.w, y: n.y + (n.h - h) / 2 + dy * n.h, w, h });
+      }
+    }
+  }
+  return out;
+}
+
 /** Warps every pocket from every frame and keeps the sharpest, least glary crop of each. */
 export function extractPockets(frames: RGBAImage[], cal: Calibration, cfg: RecognizeConfig = DEFAULT_RECOGNIZE): PocketCrop[] {
   const best = new Map<string, PocketCrop>();
@@ -307,41 +336,61 @@ export function recognizePocket(pc: PocketCrop, idx: MatchIndex, cfg: RecognizeC
   if (blankFraction(grayRect(pc.gray, nominal, 48, 67)) >= cfg.blankFraction) return { ...empty(), blank: true };
   const windows = candidateWindows(pc.gray, cfg);
   const fps = windows.map((w) => fingerprint(pc.crop, w, pc.gray));
-  // Stage 1: placements against the whole index, for a shortlist.
-  const coarse = nearestIn(fps.slice(0, cfg.coarseWindows ?? fps.length), idx, 300);
-  // Stage 2: all placements against the shortlist; remember which window won.
-  const subset = Int32Array.from(coarse.map((m) => m.card));
   const pref = idx.preferred;
-  const ranked = rankByCategory(nearestIn(fps, idx, 40, subset), pref, cfg.categoryLeeway);
-  const matches = ranked.matches;
-  const offCategory = ranked.offCategory;
-  let bestWindow = nominal;
-  let bestK = 0;
-  if (matches.length) {
-    let bd = Infinity;
-    windows.forEach((w, k) => {
-      const d = fpDistance(fps[k], idx.fps, matches[0].card);
-      if (d < bd) { bd = d; bestWindow = w; bestK = k; }
-    });
-  }
-  const best = matches[0];
+  /** Shortlist against the whole index with the first `coarseN` windows, then rank it with all of them. */
+  const search = (ws: Rect[], qs: Uint32Array[], coarseN: number) => {
+    // Stage 1: placements against the whole index, for a shortlist.
+    const coarse = nearestIn(qs.slice(0, coarseN), idx, 300);
+    // Stage 2: all placements against the shortlist; remember which window won.
+    const subset = Int32Array.from(coarse.map((m) => m.card));
+    const ranked = rankByCategory(nearestIn(qs, idx, 40, subset), pref, cfg.categoryLeeway);
+    let bestWindow = nominal;
+    let bestK = 0;
+    if (ranked.matches.length) {
+      let bd = Infinity;
+      ws.forEach((w, k) => {
+        const d = fpDistance(qs[k], idx.fps, ranked.matches[0].card);
+        if (d < bd) { bd = d; bestWindow = w; bestK = k; }
+      });
+    }
+    const best = ranked.matches[0];
+    // How sure: the gap to the next different card (of the binder's colours, when it's one of them).
+    const rivals = pref && best && pref[best.card] ? ranked.matches.filter((m) => pref[m.card]) : ranked.matches;
+    const other = best ? rivals.find((m) => idx.nameOf[m.card] !== idx.nameOf[best.card]) : undefined;
+    const otherD = other ? other.d : best ? best.d + 30 : Infinity;
+    const confident = !!best && best.d <= cfg.acceptDistance && otherD - best.d >= cfg.acceptMargin;
+    let status: PocketStatus = 'unknown';
+    if (confident) status = 'matched';
+    else if (best && best.d <= cfg.maybeDistance) status = 'uncertain';
+    // Not one of the binder's colours: worth a look (misfiled, or the colours were set wrong).
+    if (ranked.offCategory && status === 'matched') status = 'uncertain';
+    return { matches: ranked.matches, offCategory: ranked.offCategory, bestWindow, bestK, otherD, confident, status, qs };
+  };
+  let found = search(windows, fps, cfg.coarseWindows ?? fps.length);
   if (idx.back) {
     // An empty sleeve whose other side holds a card shows that card's back.
+    const best = found.matches[0];
     const dBack = Math.min(...fps.map((q) => fpDistance(q, idx.back!, 0)));
     if (dBack <= cfg.acceptDistance && (!best || dBack < best.d)) {
       return { page: pc.page, slot: pc.slot, status: 'empty', cardBack: true, matches: [], otherNameDistance: Infinity, sharpness: pc.sharpness, glare: pc.glare, thumb: thumbOf(nominal) };
     }
   }
-  // How sure: the gap to the next different card (of the binder's colours, when it's one of them).
-  const rivals = pref && best && pref[best.card] ? matches.filter((m) => pref[m.card]) : matches;
-  const other = best ? rivals.find((m) => idx.nameOf[m.card] !== idx.nameOf[best.card]) : undefined;
-  const otherD = other ? other.d : best ? best.d + 30 : Infinity;
-  if (lowDetail && !(best && best.d <= cfg.acceptDistance && otherD - best.d >= cfg.acceptMargin)) return empty();
-  let status: PocketStatus = 'unknown';
-  if (best && best.d <= cfg.acceptDistance && otherD - best.d >= cfg.acceptMargin) status = 'matched';
-  else if (best && best.d <= cfg.maybeDistance) status = 'uncertain';
-  // Not one of the binder's colours: worth a look (misfiled, or the colours were set wrong).
-  if (offCategory && status === 'matched') status = 'uncertain';
+  // Not sure: look again with the card smaller and shifted in its window (not for a blank-looking pocket,
+  // which is most likely an empty sleeve, to keep scanning quick).
+  if (cfg.widerSearch && found.status !== 'matched' && !lowDetail) {
+    const wide = wideWindows(cfg);
+    const ws = [...windows, ...wide];
+    const qs = [...fps, ...wide.map((w) => fingerprint(pc.crop, w, pc.gray))];
+    const again = search(ws, qs, qs.length);
+    const rank = { matched: 3, uncertain: 2, unknown: 1, empty: 0 } as const;
+    const d = (f: typeof found) => f.matches[0]?.d ?? Infinity;
+    // More windows also let a wrong card fit a little better by chance (a real Chill Haunting, right but
+    // unsure at 36, lost to Sick and Tired at 32): the second look counts only when it's clearly better.
+    if (again.status === 'matched' || (rank[again.status] >= rank[found.status] && d(again) <= d(found) - cfg.widerGain)) found = again;
+  }
+  const { matches, offCategory, bestWindow, bestK, otherD } = found;
+  if (lowDetail && !found.confident) return empty();
+  const status = found.status;
 
   // Crops from the full-resolution frame (sharper than the pocket crop): the title line for OCR, the set symbol for printings.
   const regionOf = (r: readonly [number, number, number, number]): Rect => ({ x: bestWindow.x + bestWindow.w * r[0], y: bestWindow.y + bestWindow.h * r[1], w: bestWindow.w * (r[2] - r[0]), h: bestWindow.h * (r[3] - r[1]) });
@@ -364,7 +413,7 @@ export function recognizePocket(pc: PocketCrop, idx: MatchIndex, cfg: RecognizeC
     infoCrop,
     symbolCrop,
     contrast: meanStd(grayRect(pc.gray, bestWindow, 48, 67)).std,
-    query: fps[bestK],
+    query: found.qs[bestK],
     borderLuma: borderLuma(pc.gray, bestWindow),
   };
 }

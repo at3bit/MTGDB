@@ -39,15 +39,18 @@ interface Props {
   onBack: () => void;
   onClose: () => void;
   onReadName?: () => void;
+  /** Sets of the cards just before this one (see recentSets): their printings are offered first. */
+  recentSets?: string[];
 }
 
 const TIPS_KEY = 'mtgdb-hide-printing-tips';
 
-export function CardCheck({ db, live, pocket, location, position, onSave, onBack, onClose, onReadName }: Props) {
+export function CardCheck({ db, live, pocket, location, position, onSave, onBack, onClose, onReadName, recentSets }: Props) {
   const [query, setQuery] = useState('');
   /** A name picked from the search: swipe through its printings instead. */
   const [searched, setSearched] = useState<number | null>(null);
-  const options = useMemo(() => cardOptions(db, pocket, searched ?? undefined), [db, pocket, searched]);
+  const recentKey = recentSets?.join() ?? '';
+  const options = useMemo(() => cardOptions(db, pocket, searched ?? undefined, recentSets), [db, pocket, searched, recentKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const [i, setI] = useState(0);
   const option = options[Math.min(i, options.length - 1)] ?? null;
   const info = option !== null ? db.info(option) : null;

@@ -329,6 +329,50 @@ try {
   await page.getByRole('button', { name: 'Collections', exact: true }).click();
   await page.screenshot({ path: join(out, '8-home-after.png'), fullPage: true });
 
+  // Cover art: picked from the collection's menu, shown on its header and its home tile.
+  const tileArt = () => page.locator('.ctile:not(.new) img.art').first().getAttribute('src');
+  const autoArt = await tileArt();
+  await page.getByRole('button', { name: /^Trade Binder:/ }).click();
+  await page.getByRole('button', { name: 'Collection actions' }).click();
+  await page.getByRole('button', { name: /Choose cover art/ }).click();
+  const coverTiles = page.getByRole('radiogroup', { name: 'Cover art' }).getByRole('radio');
+  const coverCount = await coverTiles.count();
+  await page.getByLabel('Search this collection').fill(someName);
+  const filtered = await coverTiles.count();
+  await page.getByLabel('Search this collection').fill('');
+  await coverTiles.nth(3).click();
+  const heroArt = await page.locator('.hero img.hero-art').getAttribute('src');
+  await page.getByRole('button', { name: 'Collections', exact: true }).click();
+  const pickedArt = await tileArt();
+  await page.reload();
+  await page.getByTestId('portfolio-total').waitFor();
+  const keptArt = await tileArt();
+  check(coverCount >= 50 && filtered === 1 && heroArt !== autoArt && pickedArt === heroArt && keptArt === heroArt, `cover art: ${coverCount} cards to pick from (${filtered} for “${someName}”); the header and home tile show the pick (${pickedArt !== autoArt}), kept after a reload (${keptArt === heroArt})`);
+  // Back to the automatic cover (the most valuable card).
+  await page.getByRole('button', { name: /^Trade Binder:/ }).click();
+  await page.getByRole('button', { name: 'Collection actions' }).click();
+  await page.getByRole('button', { name: /Choose cover art/ }).click();
+  await page.getByRole('button', { name: /Use the most valuable card/ }).click();
+  await page.getByRole('button', { name: 'Collections', exact: true }).click();
+  check((await tileArt()) === autoArt, 'cover art back to the most valuable card');
+
+  // Settings: outline colour and theme, kept on the phone.
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await page.getByRole('heading', { name: 'Settings' }).waitFor();
+  await page.getByRole('radio', { name: 'Lime', exact: true }).click();
+  await page.getByRole('group', { name: 'Theme' }).getByRole('button', { name: 'Light', exact: true }).click();
+  await page.screenshot({ path: join(out, '9-settings-light.png'), fullPage: true });
+  const applied = await page.evaluate(() => ({ theme: document.documentElement.dataset.theme, outline: getComputedStyle(document.documentElement).getPropertyValue('--outline').trim(), bg: getComputedStyle(document.body).backgroundColor }));
+  await page.reload();
+  await page.getByTestId('portfolio-total').waitFor();
+  const kept = await page.evaluate(() => document.documentElement.dataset.theme);
+  await page.getByRole('button', { name: 'Settings' }).click();
+  const limeOn = await page.getByRole('radio', { name: 'Lime', exact: true }).getAttribute('aria-checked');
+  await page.getByRole('group', { name: 'Theme' }).getByRole('button', { name: 'Dark', exact: true }).click();
+  await page.getByRole('radio', { name: 'Yellow', exact: true }).click();
+  await page.getByRole('button', { name: 'Back' }).click();
+  check(applied.theme === 'light' && applied.outline === '#39ff14' && applied.bg === 'rgb(246, 243, 236)' && kept === 'light' && limeOn === 'true', `settings: theme ${applied.theme} (page ${applied.bg}), outline ${applied.outline}; after a reload theme ${kept}, Lime still picked (${limeOn})`);
+
   // With a collection saved, the setup screen offers it in a list, and Create new collection for a new one.
   const newCollection = async (name: string) => {
     await page.getByRole('button', { name: 'Scan cards' }).click();

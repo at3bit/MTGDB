@@ -18,6 +18,8 @@ import { BinderScreen, SearchScreen } from './BinderScreen.tsx';
 import { CardDetail } from './CardDetail.tsx';
 import { ownedRows, type OwnedRow } from './HomeScreen.tsx';
 import { TabBar } from './kit.tsx';
+import { SettingsScreen } from './SettingsScreen.tsx';
+import { applySettings, loadSettings, saveSettings, type Settings } from '../app/settings.ts';
 import type { Finish } from '../core/carddb.ts';
 
 type Screen =
@@ -26,7 +28,8 @@ type Screen =
   | { name: 'scan'; binder: string; source: ScanSource }
   | { name: 'review'; binder: string; fresh?: boolean }
   | { name: 'binder'; binder: string }
-  | { name: 'search'; query?: string };
+  | { name: 'search'; query?: string }
+  | { name: 'settings' };
 
 /** A card opened from a list: found again in the collection each time (its finish can change). */
 type CardRef = { binder: string; page: number; slot: number; id: string };
@@ -56,6 +59,43 @@ export function App() {
   const [dbStatus, setDbStatus] = useState<{ loading: string | null; error: string | null; missing: boolean }>({ loading: 'Loading card database…', error: null, missing: false });
   const [collection, setCollection] = useState<Collection>({ binders: [] });
   const [englishOnly, setEnglishOnlyState] = useState(readEnglishOnly);
+  const [settings, setSettings] = useState<Settings>(() => {
+    const s = loadSettings();
+    applySettings(s);
+    return s;
+  });
+  const updateSettings = (patch: Partial<Settings>) => {
+    const next = { ...settings, ...patch };
+    // A new default card layout applies to every library, so the per-screen choices are forgotten.
+    if (patch.libraryView && patch.libraryView !== settings.libraryView) {
+      for (const k of ['mtgdb-view-binder', 'mtgdb-view-all']) {
+        try {
+          localStorage.removeItem(k);
+        } catch {
+          /* private mode */
+        }
+      }
+    }
+    applySettings(next);
+    saveSettings(next);
+    setSettings(next);
+  };
+  // "Match phone": follow the phone's light/dark setting as it changes.
+  useEffect(() => {
+    if (settings.theme !== 'system' || typeof matchMedia !== 'function') return;
+    const mq = matchMedia('(prefers-color-scheme: light)');
+    const on = () => applySettings(settings);
+    mq.addEventListener?.('change', on);
+    return () => mq.removeEventListener?.('change', on);
+  }, [settings]);
+  const changeEnglishOnly = (on: boolean) => {
+    setEnglishOnlyState(on);
+    writeEnglishOnly(on);
+    if (db) {
+      db.setEnglishOnly(on);
+      recognizer.current?.updateAllowed();
+    }
+  };
   /** Review bookkeeping for the current scan (e.g. no see-through cards when empty sleeves hold blanks). */
   const sessionCfg = useRef<SessionConfig>(DEFAULT_SESSION);
   /** The unfinished scan saved on the phone (offered on the home screen after a crash). */
@@ -311,6 +351,20 @@ export function App() {
     void saveCollection(next).catch((e) => alert(`Couldn’t save the quantity: ${(e as Error).message}`));
   };
 
+  /** The card whose art represents a collection (null: back to its most valuable card). */
+  const setCover = (binder: string, id: string | null) => {
+    const next: Collection = {
+      binders: latest.current.binders.map((b) => {
+        if (b.name !== binder) return b;
+        const { cover: _old, ...rest } = b;
+        return id ? { ...rest, cover: id } : rest;
+      }),
+    };
+    latest.current = next;
+    setCollection(next);
+    void saveCollection(next).catch((e) => alert(`Couldn’t save the cover art: ${(e as Error).message}`));
+  };
+
   const openCard = (r: OwnedRow) => setDetail({ binder: r.binder, page: r.page, slot: r.slot, id: r.id });
   const detailRow = detail && db ? ownedRows(db, collection, live, history, baselines, detail.binder).find((r) => r.id === detail.id && r.page === detail.page && r.slot === detail.slot) : undefined;
   const tab = screen.name === 'search' ? 'search' : screen.name === 'home' || screen.name === 'binder' ? 'collections' : null;
@@ -325,7 +379,7 @@ export function App() {
 
   const saveBinder = async (binder: string) => {
     if (!db) return;
-    // One entry per printing (quantities aren't tracked); see-through cards and card backs are left out.
+    // One entry per printing, as one copy (quantities are set on a card's detail screen); see-through cards and card backs are left out.
     const cards: OwnedCard[] = binderEntries(spreadsRef.current, pagesPerSpread, db).map((e) => ({
       id: db.info(e.card).id,
       finish: e.finish,
@@ -348,7 +402,7 @@ export function App() {
       cards.splice(0, cards.length, ...before.cards, ...cards.filter((c) => !have.has(`${c.id}:${c.finish}`)).map((c) => ({ ...c, page: c.page + offset })));
     }
     const next: Collection = {
-      binders: [{ name: binder, updatedAt: new Date().toISOString(), cards }, ...collection.binders.filter((b) => b.name !== binder)],
+      binders: [{ name: binder, updatedAt: new Date().toISOString(), cards, ...(before?.cover ? { cover: before.cover } : {}) }, ...collection.binders.filter((b) => b.name !== binder)],
     };
     await saveCollection(next);
     setCollection(next);
@@ -397,21 +451,20 @@ export function App() {
             if (draft && confirm(`Discard the unfinished scan of “${draft.binder}”? The ${draft.checked} cards checked so far will be lost.`)) endScan();
           }}
           onRefresh={refresh}
+          sellSignal={settings.sellSignal}
+          onSettings={() => setScreen({ name: 'settings' })}
         />
+      )}
+      {screen.name === 'settings' && (
+        <SettingsScreen db={db} settings={settings} onChange={updateSettings} englishOnly={englishOnly} onEnglishOnly={changeEnglishOnly} onBack={() => setScreen({ name: 'home' })} />
       )}
       {screen.name === 'setup' && (
         <SetupScreen
           collection={collection}
           startCreating={!!screen.create}
           englishOnly={englishOnly}
-          onEnglishOnly={(on) => {
-            setEnglishOnlyState(on);
-            writeEnglishOnly(on);
-            if (db) {
-              db.setEnglishOnly(on);
-              recognizer.current?.updateAllowed();
-            }
-          }}
+          onEnglishOnly={changeEnglishOnly}
+          keepHeic={settings.keepHeic}
           onBack={() => setScreen({ name: 'home' })}
           hasCategories={!!db?.hasCategories}
           onStart={(binder, source, options) => {
@@ -494,6 +547,7 @@ export function App() {
             setScreen({ name: 'home' });
           }}
           onOpenCard={openCard}
+          onSetCover={(id) => setCover(screen.binder, id)}
         />
       )}
       {tab && !detailRow && (

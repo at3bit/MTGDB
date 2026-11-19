@@ -4,7 +4,7 @@ import { copies, totals, trendFor, type Collection, type PriceHistory } from '..
 import { scryfallArt } from '../app/prices.ts';
 import type { Baselines } from '../core/baselines.ts';
 import type { DraftSummary } from '../app/draft.ts';
-import { collectionMana, Icon, LIGHT_TILES, PriceBadge } from './kit.tsx';
+import { collectionMana, Icon, IconButton, LIGHT_TILES, PriceBadge } from './kit.tsx';
 import { CardRow } from './CardsView.tsx';
 
 interface Props {
@@ -25,6 +25,9 @@ interface Props {
   onResume: () => void;
   onDiscardDraft: () => void;
   onRefresh: () => void;
+  /** See Settings.sellSignal. */
+  sellSignal?: number;
+  onSettings: () => void;
 }
 
 /** A card is a sell candidate when it's this far above its own 30-day average. */
@@ -61,6 +64,11 @@ export function ownedRows(db: CardDB, col: Collection, live: LivePrices, history
   return rows;
 }
 
+/** The card whose art stands for a collection: the one chosen as its cover, else the most valuable. */
+export function coverRow(rows: OwnedRow[], cover?: string): OwnedRow | null {
+  return (cover ? rows.find((r) => r.id === cover) : undefined) ?? rows.reduce<OwnedRow | null>((m, r) => ((r.price ?? 0) > (m?.price ?? -1) ? r : m), null);
+}
+
 /** One row per printing and finish (the first place it's stored), for lists that name each card once. */
 export function uniqueRows(rows: OwnedRow[]): OwnedRow[] {
   const seen = new Set<string>();
@@ -86,14 +94,14 @@ export function change30(rows: OwnedRow[]): { gain: number; pct: number } | null
 
 const plural = (n: number, w: string) => `${n.toLocaleString()} ${w}${n === 1 ? '' : 's'}`;
 
-export function HomeScreen({ db, dbStatus, collection, live, history, baselines, refreshing, onOpenBinder, onNewCollection, onOpenCard, onSeeAll, draft, onResume, onDiscardDraft, onRefresh }: Props) {
+export function HomeScreen({ db, dbStatus, collection, live, history, baselines, refreshing, onOpenBinder, onNewCollection, onOpenCard, onSeeAll, draft, onResume, onDiscardDraft, onRefresh, sellSignal = SELL_SIGNAL, onSettings }: Props) {
   const allRows = db ? ownedRows(db, collection, live, history, baselines) : [];
   // The portfolio is every copy in every collection; the lists below name each printing once.
   const rows = uniqueRows(allRows);
   const { value: total, count } = totals(allRows);
   const change = change30(allRows);
   const sell = rows
-    .filter((r) => r.trend && r.trend.vsAvg >= SELL_SIGNAL && r.trend.avg * r.trend.vsAvg >= 1)
+    .filter((r) => r.trend && r.trend.vsAvg >= sellSignal && r.trend.avg * r.trend.vsAvg >= 1)
     .sort((a, b) => b.trend!.avg * b.trend!.vsAvg - a.trend!.avg * a.trend!.vsAvg)
     .slice(0, 5);
   const top = [...rows].sort((a, b) => (b.price ?? 0) - (a.price ?? 0)).slice(0, 5);
@@ -124,7 +132,10 @@ export function HomeScreen({ db, dbStatus, collection, live, history, baselines,
       {dbStatus.loading && <div className="notice">{dbStatus.loading}</div>}
 
       <section className="portfolio" aria-labelledby="portfolio-title">
-        <h1 className="eyebrow" id="portfolio-title">Portfolio</h1>
+        <div className="portfolio-head">
+          <h1 className="eyebrow" id="portfolio-title">Portfolio</h1>
+          <IconButton icon="settings" label="Settings" onClick={onSettings} />
+        </div>
         <div className="money-hero" data-testid="portfolio-total">{formatUSD(total)}</div>
         <div className="trend">
           {change && Math.abs(change.gain) >= 0.05 && <PriceBadge change={change.gain} pct={change.pct} suffix="30 days" />}
@@ -163,7 +174,7 @@ export function HomeScreen({ db, dbStatus, collection, live, history, baselines,
             {collection.binders.map((b) => {
               const mine = db ? allRows.filter((r) => r.binder === b.name) : [];
               const { value, count: held } = totals(mine);
-              const best = mine.reduce<OwnedRow | null>((m, r) => ((r.price ?? 0) > (m?.price ?? -1) ? r : m), null);
+              const best = coverRow(mine, b.cover);
               const mana = db ? collectionMana(db, b) : 'C';
               return (
                 <button key={b.name} className={`ctile mana-${mana}${LIGHT_TILES.includes(mana) ? ' light' : ''}`} onClick={() => onOpenBinder(b.name)} aria-label={`${b.name}: ${db ? formatUSD(value) : ''}, ${plural(db ? held : b.cards.length, 'card')}`}>
@@ -191,7 +202,7 @@ export function HomeScreen({ db, dbStatus, collection, live, history, baselines,
             <h2 className="title-m" id="sell-title">Worth selling now</h2>
           </div>
           <p className="small muted" style={{ margin: '-6px 0 4px' }}>
-            At least {Math.round(SELL_SIGNAL * 100)}% (and $1) above their 30-day average{baselines ? ` on TCGplayer, as of ${baselines.asOf}` : ''}.
+            At least {Math.round(sellSignal * 100)}% (and $1) above their 30-day average{baselines ? ` on TCGplayer, as of ${baselines.asOf}` : ''}.
           </p>
           {sell.map((r) => (
             <CardRow key={`${r.binder}-${r.page}-${r.slot}`} id={r.id} name={r.name} finish={r.finish} meta={`${r.binder} · page ${r.page}, slot ${r.slot} · avg ${formatUSD(r.trend!.avg)}`} price={r.price} qty={r.qty} trend={r.trend} onOpen={() => onOpenCard(r)} />

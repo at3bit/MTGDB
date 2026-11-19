@@ -154,7 +154,11 @@ try {
   await page.getByRole('button', { name: 'Black', exact: true }).click().catch(() => {});
   await shot('02-setup-new');
   await shot('02b-setup-new-full', true);
-  await page.setInputFiles('[data-testid=photo-input]', photos);
+  // Upload photos: the app waits for the Photos app to hand them over.
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByRole('button', { name: /^Upload photos/ }).click()]);
+  await page.getByTestId('picking').waitFor();
+  await shot('02c-getting-photos');
+  await chooser.setFiles(photos);
   await page.getByRole('button', { name: /^Read 3 photos$/ }).waitFor({ timeout: 30000 });
   await shot('03-outline');
   await page.getByRole('button', { name: /^Read 3 photos$/ }).click();
@@ -241,6 +245,30 @@ try {
   await page.getByLabel('Search cards').fill((firstName ?? '').replace(' ✦', '').slice(0, 8));
   await page.waitForTimeout(2000);
   await shot('13-search');
+  // Settings, then the app in the light theme.
+  await page.getByRole('button', { name: 'Collections', exact: true }).click();
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await page.getByRole('heading', { name: 'Settings' }).waitFor();
+  await shot('14-settings');
+  await shot('14b-settings-full', true);
+  await page.getByRole('group', { name: 'Theme' }).getByRole('button', { name: 'Light', exact: true }).click();
+  await shot('15-settings-light');
+  await page.getByRole('button', { name: 'Back' }).click();
+  await page.waitForTimeout(1500);
+  await shot('15b-home-light');
+  await page.getByRole('button', { name: /^Black R\/UC:/ }).click();
+  await page.waitForTimeout(2000);
+  await shot('15c-collection-light');
+  await page.getByRole('button', { name: 'Collection actions' }).click();
+  await page.getByRole('button', { name: /Choose cover art/ }).click();
+  await page.waitForTimeout(2000);
+  await shot('16-cover-picker-light');
+  await page.getByRole('radiogroup', { name: 'Cover art' }).getByRole('radio').nth(2).click();
+  await page.waitForTimeout(1500);
+  await shot('16b-collection-new-cover-light');
+  await page.locator('.card-grid button, .ctard').first().click();
+  await page.waitForTimeout(2500);
+  await shot('15d-card-detail-light');
 } catch (e) {
   console.error(e);
   await page.screenshot({ path: join(out, 'error.png'), fullPage: true }).catch(() => {});

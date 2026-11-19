@@ -44,6 +44,8 @@ export interface Binder {
   name: string;
   updatedAt: string;
   cards: OwnedCard[];
+  /** Scryfall id of the card whose art represents the collection (chosen in its menu); else its most valuable card. */
+  cover?: string;
 }
 
 export interface Collection {

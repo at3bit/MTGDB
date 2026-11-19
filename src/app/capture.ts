@@ -177,7 +177,7 @@ export async function openPhotos(img: HTMLImageElement, files: File[]): Promise<
       await img.decode();
     } catch {
       URL.revokeObjectURL(next);
-      throw new Error(`Couldn’t open photo ${k + 1} (${files[k].name}). If it’s HEIC, share it as JPEG (Most Compatible) and try again.`);
+      throw new Error(`Couldn’t open photo ${k + 1} (${files[k].name}). If it’s HEIC, turn off Faster photo import in Settings (or share it as JPEG, Most Compatible) and try again.`);
     }
     if (url) URL.revokeObjectURL(url);
     url = next;

@@ -77,6 +77,14 @@ link. Each person's collection is stored only on their own phone.
    cards slide around in their pockets, and every placement helps build the
    shortlist (with only the two likeliest, 3 of 23 cards on real photos were
    missed although they matched well). A page takes about half a second.
+   A card that isn't matched confidently gets a **second look** with smaller,
+   shifted windows (86–94% of the pocket, nudged up to 4% sideways and from 3%
+   up to 6% down): in roomy pockets the card sits smaller than the outline and
+   rests low. On a real blue binder the first look matched none of 10 such
+   cards (and so read their names from the wrong strip); the second look
+   matched all 10 by clear margins. Its unsure result replaces the first
+   look's only if it's closer by 8 or more, since more windows also let a wrong
+   card fit a little better by chance.
 5. **Name reading** (`src/app/ocr.ts`). Every card's title line is read with
    Tesseract (served by the app itself) and fuzzy-matched to card names, as a
    cross-check: when it agrees with the image match the card is confirmed;
@@ -247,10 +255,15 @@ link. Each person's collection is stored only on their own phone.
   after its pages (printings it already has aren't added twice), so a big
   binder can be scanned in several sittings. To start a collection over,
   delete it and create it again.
-- **Unsure guesses**: when the app isn't sure of a card and its closest match
-  isn't one of the collection's colours, the closest one that is comes first
-  (a green Ooze was offered for Grim Return, a Plains for Stitch Together).
-  A confident off-colour match, a misfiled card, stays. The Zeta Set (a
+- **Unsure guesses**: when the app isn't sure of a card (or can't identify
+  it), every candidate in the collection's colours comes before the others
+  (a green Ooze was offered for Grim Return, a Plains for Stitch Together,
+  Canopy Surge for Clone). A confident off-colour match, a misfiled card,
+  stays.
+- **Searching to fix a card**: the printings of a searched name start with
+  the set of the few cards just before it (binders are mostly sorted by set):
+  after three Tenth Edition cards, a searched card's Tenth Edition printing
+  comes first. The Zeta Set (a
   parody set) and playtest cards are left out of picture matching; search
   still finds them.
 - **Printing tips** ("several printings look alike…", "…like the other cards
@@ -291,11 +304,23 @@ visible focus ring; `npm run ux` re-measures this.
 - **Tab bar**: Collections, the raised gold **Scan** button, and Search.
 - **Collections** (home): the portfolio total and its 30-day change, a tile
   per collection in its colour (chosen on the scan screen, or the colour most
-  of its cards share) with the art of its most valuable card, Worth selling
-  now and Most valuable.
-- **A collection**: a header tinted with its colour and best card's art, then
-  its cards as a Gallery, a List or Art (each card's illustration). Export,
-  Share scan report and Delete are in the ⋯ menu.
+  of its cards share) with its cover art, Worth selling now and Most
+  valuable. The gear opens Settings.
+- **A collection**: a header tinted with its colour and cover art, then its
+  cards as a Gallery, a List or Art (each card's illustration). Choose cover
+  art (any of its cards, with a search; the most valuable card until you
+  pick one), Export, Share scan report and Delete are in the ⋯ menu.
+- **Settings** (kept on the phone): the scan outline's colour (15 bright and
+  colour-blind-safe colours; yellow by default), line weight and a contrast
+  edge behind the lines; Dark, Light or Match phone theme; how collections
+  open (Gallery, List or Art); the Worth selling now threshold (+10% to +50%);
+  English cards only, Click sound and Faster photo import.
+- **Uploading photos**: while the Photos app hands the photos over, the app
+  shows Getting your photos… with a Cancel button. Safari converts each HEIC
+  photo to JPEG first, which is most of the wait for dozens of photos;
+  **Faster photo import** asks for the originals instead (iOS 17 or later
+  opens HEIC). It's off by default because it hasn't been tried on every
+  iPhone yet.
 - **Card detail** (tap any card): its art fills the screen behind it; price
   and 30-day change, the price history recorded on this phone, where it lives
   (collection, page and slot, printing), its quantity and its finish, both of
@@ -310,7 +335,7 @@ visible focus ring; `npm run ux` re-measures this.
   about once a day. The app refreshes prices for the cards you own from
   Scryfall's API automatically (at most twice a day), or right away with
   **Refresh prices**.
-- **Worth selling now** lists cards trading at least 20% (and $1) above their
+- **Worth selling now** lists cards trading at least 20% (set in Settings) and $1 above their
   own 30-day average. The average comes from MTGJSON's 90-day TCGplayer
   history (`npm run baselines`), so it works from the first day. Without that
   file, the app falls back to the daily prices it records itself.

@@ -1,9 +1,11 @@
 // The outline drawn over the photo or video: one shape with four corner
 // handles, whatever the input. For an open binder it goes around both pages,
 // and a handle on the spine sets the gap between them. Each page shows its
-// 3x3 pocket grid; the white edge marks the top of the cards.
+// 3x3 pocket grid; the white edge marks the top of the cards. Its colour and weight are set in Settings,
+// with a contrasting edge behind the lines so they show over light and dark cards alike.
 import { useRef } from 'react';
 import { applyH, homography, MAX_GAP, outlineOf, subQuad, UNIT_QUAD, withOutline, type Calibration, type Pt, type Quad } from '../core/geometry.ts';
+import { currentSettings, OUTLINE_SCALE } from '../app/settings.ts';
 
 interface Props {
   cal: Calibration;
@@ -21,6 +23,9 @@ export function QuadOverlay({ cal, width, height, editable, onChange, highlight 
   const drag = useRef<Drag | null>(null);
   const px = (p: Pt) => ({ x: p.x * width, y: p.y * height });
   const unit = Math.max(width, height) / 100;
+  const settings = currentSettings();
+  const w = OUTLINE_SCALE[settings.outlineWeight];
+  const halo = settings.outlineHalo;
   const { quad, gap } = outlineOf(cal);
   const twoPages = cal.pages.length > 1;
 
@@ -76,15 +81,17 @@ export function QuadOverlay({ cal, width, height, editable, onChange, highlight 
 
   return (
     <svg ref={svg} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" onPointerMove={move} onPointerUp={end} onPointerCancel={end}>
+      {halo && <polygon className="halo" points={pts.map((p) => `${p.x},${p.y}`).join(' ')} strokeWidth={unit * w * (highlight ? 0.5 : 0.35) + unit * 0.5} pointerEvents="none" />}
+      {halo && <path className="halo" d={lines.join('')} strokeWidth={unit * w * 0.2 + unit * 0.4} pointerEvents="none" />}
       <polygon
         className={`quad ${editable ? '' : 'locked'}`}
         points={pts.map((p) => `${p.x},${p.y}`).join(' ')}
-        strokeWidth={unit * (highlight ? 0.5 : 0.35)}
+        strokeWidth={unit * w * (highlight ? 0.5 : 0.35)}
         onPointerDown={start('all')}
         style={{ cursor: editable ? 'move' : 'default' }}
       />
       {spine && <polygon className="spine" points={spine.map((p) => `${p.x},${p.y}`).join(' ')} pointerEvents="none" />}
-      <path className="gridline" d={lines.join('')} strokeWidth={unit * 0.2} pointerEvents="none" />
+      <path className="gridline" d={lines.join('')} strokeWidth={unit * w * 0.2} pointerEvents="none" />
       <line className="topedge" x1={pts[0].x} y1={pts[0].y} x2={pts[1].x} y2={pts[1].y} strokeWidth={unit * 0.6} pointerEvents="none" />
       <text x={mid.x} y={mid.y} dy={-unit * 1.2} fill="#fff" fontSize={unit * 2.4} textAnchor="middle" fontWeight={700} pointerEvents="none">
         top

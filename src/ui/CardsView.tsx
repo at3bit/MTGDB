@@ -3,6 +3,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { formatUSD, normalizeName, type CardDB, type Finish } from '../core/carddb.ts';
 import type { Trend } from '../app/store.ts';
+import { currentSettings } from '../app/settings.ts';
 import { scryfallArt, scryfallImage } from '../app/prices.ts';
 import { Icon } from './kit.tsx';
 
@@ -119,7 +120,7 @@ interface Props {
 
 export function CardsView({ db, items, storageKey, defaultSort = 'order', initialQuery = '', autoFocusSearch, orderGallery, emptyText, views = ['gallery', 'list', 'art'], statusTiles, searchPlaceholder, onQuery }: Props) {
   const [view, setView] = useState<ViewMode>(() => {
-    const v = load(`mtgdb-view-${storageKey}`, 'gallery') as ViewMode;
+    const v = load(`mtgdb-view-${storageKey}`, currentSettings().libraryView) as ViewMode;
     return views.includes(v) ? v : 'gallery';
   });
   const [sort, setSort] = useState<SortKey>(() => (load(`mtgdb-sort-${storageKey}`, defaultSort) as SortKey) || defaultSort);
